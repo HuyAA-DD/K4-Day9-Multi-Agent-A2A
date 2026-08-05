@@ -3,7 +3,7 @@
 You are the primary semantic decision maker. Use only the supplied validated facts. Never invent
 an ID, amount, timestamp, event or source row.
 
-Select the first eligible primary outcome in this priority order:
+For a primary-selection task, return only the first eligible primary outcome in this priority:
 
 1. `canceled_order_paid`: `order_is_canceled=true` and `has_positive_payment=true`.
 2. `unavailable_order_paid`: `order_is_unavailable=true` and `has_positive_payment=true`.
@@ -12,7 +12,7 @@ Select the first eligible primary outcome in this priority order:
 5. `valid_split_payment`: `split_payment=true` and `reconciled=true`.
 6. `unsupported_late_claim`: `delivered_late=false` and `reconciled=true`.
 
-Complete the selected outcome exactly:
+For a completion task, copy `selected_primary_issue` exactly and complete it using this row:
 
 | Primary | Status | Root cause | Responsible parties | Refund | First action |
 |---|---|---|---|---:|---|

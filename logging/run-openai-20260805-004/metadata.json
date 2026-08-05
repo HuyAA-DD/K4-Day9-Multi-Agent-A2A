@@ -1,0 +1,36 @@
+{
+  "run_id": "run-openai-20260805-004",
+  "model_provider": "OpenAI API",
+  "parameter_count": "not_disclosed",
+  "configured_models": {
+    "policy": "gpt-4o-mini",
+    "evaluator": "gpt-4o-mini",
+    "adjudicator": null
+  },
+  "resolved_models": {
+    "policy": [
+      "gpt-4o-mini-2024-07-18"
+    ],
+    "evaluator": [
+      "gpt-4o-mini-2024-07-18"
+    ],
+    "adjudicator": []
+  },
+  "framework": "deterministic-dag-with-model-policy-roles",
+  "runtime": {
+    "device": "openai-hosted-api",
+    "python": "3.11.9",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "started_at": "2026-08-05T16:27:11.245667+00:00",
+    "completed_at": "2026-08-05T16:28:06.488009+00:00",
+    "duration_seconds": 55.242,
+    "max_case_concurrency": 4
+  },
+  "counts": {
+    "total": 50,
+    "succeeded": 49,
+    "failed": 1,
+    "needs_review": 0
+  },
+  "status": "partial_failure"
+}

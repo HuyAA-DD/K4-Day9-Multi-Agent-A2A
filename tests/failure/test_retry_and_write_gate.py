@@ -1,4 +1,5 @@
 import json
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,10 @@ from ecommerce_dispute.orchestration.runner import DisputeRunner
 
 
 class InvalidThenValidClient(OracleModelClient):
+    def __init__(self, settings) -> None:
+        super().__init__(settings)
+        self.outcome_calls: defaultdict[str, int] = defaultdict(int)
+
     async def complete_json(
         self,
         system_prompt: str,
@@ -19,12 +24,20 @@ class InvalidThenValidClient(OracleModelClient):
         response_schema: dict[str, Any],
         max_output_tokens: int | None = None,
     ) -> ModelCompletion:
-        del system_prompt, response_schema, max_output_tokens
+        del system_prompt, max_output_tokens
         self.calls[model] += 1
         request = json.loads(user_payload)
         facts = request["facts"]
-        outcome = complete_outcome(select_primary_issue(facts), facts)
-        if self.calls[model] == 1:
+        primary = select_primary_issue(facts)
+        if response_schema.get("title") == "PrimarySelection":
+            return ModelCompletion(
+                content={"primary_issue": primary, "confidence": 0.95},
+                model_id=model,
+                request_id=f"{model}-primary",
+            )
+        self.outcome_calls[model] += 1
+        outcome = complete_outcome(primary, facts)
+        if self.outcome_calls[model] == 1:
             outcome["recommended_refund_brl"] = 999999
         return ModelCompletion(content=outcome, model_id=model, request_id=f"{model}-retry")
 
@@ -53,8 +66,8 @@ async def test_agent_retries_its_own_invalid_grounding(
     )
     result = (await runner.run_cases([load_case("EC_001")]))[0]
     assert result.status == "success"
-    assert client.calls["policy-test-model"] == 2
-    assert client.calls["evaluator-test-model"] == 2
+    assert client.calls["policy-test-model"] == 3
+    assert client.calls["evaluator-test-model"] == 3
 
 
 @pytest.mark.asyncio

@@ -127,13 +127,17 @@ class OracleModelClient:
         response_schema: dict[str, Any],
         max_output_tokens: int | None = None,
     ) -> ModelCompletion:
-        del system_prompt, response_schema, max_output_tokens
+        del system_prompt, max_output_tokens
         self.calls[model] += 1
         request = json.loads(user_payload)
         facts = request["facts"]
         primary = select_primary_issue(facts)
+        if response_schema.get("title") == "PrimarySelection":
+            content = {"primary_issue": primary, "confidence": 0.95}
+        else:
+            content = complete_outcome(primary, facts)
         return ModelCompletion(
-            content=complete_outcome(primary, facts),
+            content=content,
             model_id=model,
             request_id=f"{model}-{self.calls[model]}",
             usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},

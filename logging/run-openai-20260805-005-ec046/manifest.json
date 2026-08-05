@@ -1,0 +1,17 @@
+{
+  "run_id": "run-openai-20260805-005-ec046",
+  "status": "partial_failure",
+  "cases_total": 1,
+  "cases_succeeded": 0,
+  "cases_failed": 1,
+  "cases_needing_review": 0,
+  "cases": [
+    {
+      "case_id": "EC_046",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "policy failed after 3 attempts: Expected ['multi_item_order', 'split_payment'], got ['multi_item_order']; Expected ['refund_freight', 'review_seller_handoff', 'verify_refund_completion', 'verify_payment_allocation'], got ['refund_freight', 'review_seller_handoff', 'verify_refund_completion']"
+    }
+  ]
+}

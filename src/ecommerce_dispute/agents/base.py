@@ -10,9 +10,18 @@ from typing import Any
 from pydantic import ValidationError
 
 from ecommerce_dispute.llm import StructuredModelClient
-from ecommerce_dispute.schemas import DecisionMetadata, PolicyOutcome, ValidatedPolicyFacts
+from ecommerce_dispute.schemas import (
+    DecisionMetadata,
+    PolicyOutcome,
+    PrimarySelection,
+    ValidatedPolicyFacts,
+)
 from ecommerce_dispute.tracing import TraceWriter
-from ecommerce_dispute.validation import outcome_grounding_issues, policy_invariant_issues
+from ecommerce_dispute.validation import (
+    outcome_grounding_issues,
+    policy_invariant_issues,
+    primary_selection_issue,
+)
 
 
 class AgentDecisionError(RuntimeError):
@@ -42,6 +51,85 @@ class ModelPolicyRole:
         self.prompt_hash = sha256(self.system_prompt.encode("utf-8")).hexdigest()
         self.resolved_model_ids: set[str] = set()
 
+    async def complete_primary_selection(
+        self,
+        *,
+        run_id: str,
+        case_id: str,
+        facts: ValidatedPolicyFacts,
+        source_fact_hash: str,
+    ) -> PrimarySelection:
+        payload = {
+            "task": "Select only the first eligible EC_POLICY_V2 primary issue.",
+            "policy_version": facts.policy_version,
+            "facts": facts.model_dump(mode="json"),
+        }
+        correction: str | None = None
+        last_error = "unknown primary selection error"
+        settings = self.model_client.settings
+        for attempt in range(1, settings.max_agent_attempts + 1):
+            request = dict(payload)
+            if correction:
+                request["correction"] = correction
+            started = perf_counter()
+            try:
+                completion = await self.model_client.complete_json(
+                    self.system_prompt,
+                    json.dumps(request, ensure_ascii=False, separators=(",", ":")),
+                    model=self.model_name,
+                    response_schema=PrimarySelection.model_json_schema(),
+                    max_output_tokens=96,
+                )
+                selection = PrimarySelection.model_validate(completion.content)
+                issue = primary_selection_issue(selection.primary_issue, facts)
+                if issue:
+                    raise AgentDecisionError(issue)
+                self.resolved_model_ids.add(completion.model_id)
+                self.trace_writer.write(
+                    {
+                        "run_id": run_id,
+                        "case_id": case_id,
+                        "agent": self.role,
+                        "event": "model_primary_selection",
+                        "attempt": attempt,
+                        "model": completion.model_id,
+                        "provider_request_id": completion.request_id,
+                        "prompt_version": self.prompt_version,
+                        "prompt_hash": self.prompt_hash,
+                        "source_fact_hash": source_fact_hash,
+                        "latency_ms": round((perf_counter() - started) * 1000, 2),
+                        "usage": completion.usage,
+                        "primary_issue": selection.primary_issue,
+                    }
+                )
+                return selection
+            except (AgentDecisionError, ValidationError, ValueError) as exc:
+                last_error = str(exc)
+            except Exception as exc:  # noqa: BLE001  # bounded external model boundary
+                last_error = f"{type(exc).__name__}: {exc}"
+            self.trace_writer.write(
+                {
+                    "run_id": run_id,
+                    "case_id": case_id,
+                    "agent": self.role,
+                    "event": "model_primary_selection_retry",
+                    "attempt": attempt,
+                    "model": self.model_name,
+                    "source_fact_hash": source_fact_hash,
+                    "error": last_error[:500],
+                }
+            )
+            correction = (
+                f"The previous primary selection was invalid: {last_error}. "
+                "Re-read the priority order and choose the first eligible outcome from facts."
+            )
+            if attempt < settings.max_agent_attempts and settings.retry_backoff_seconds > 0:
+                await asyncio.sleep(settings.retry_backoff_seconds * (2 ** (attempt - 1)))
+        raise AgentDecisionError(
+            f"{self.role} failed primary selection after "
+            f"{settings.max_agent_attempts} attempts: {last_error}"
+        )
+
     async def complete_outcome(
         self,
         *,
@@ -53,9 +141,16 @@ class ModelPolicyRole:
         additional_payload: dict[str, Any] | None = None,
         disputed_fields: tuple[str, ...] = (),
     ) -> tuple[PolicyOutcome, DecisionMetadata]:
+        primary = await self.complete_primary_selection(
+            run_id=run_id,
+            case_id=case_id,
+            facts=facts,
+            source_fact_hash=source_fact_hash,
+        )
         payload: dict[str, Any] = {
             "task": task,
             "policy_version": facts.policy_version,
+            "selected_primary_issue": primary.primary_issue,
             "facts": facts.model_dump(mode="json"),
         }
         if additional_payload:
@@ -83,6 +178,11 @@ class ModelPolicyRole:
                     max_output_tokens=settings.max_output_tokens,
                 )
                 outcome = PolicyOutcome.model_validate(completion.content)
+                if outcome.primary_issue != primary.primary_issue:
+                    raise AgentDecisionError(
+                        "primary_issue must exactly copy selected_primary_issue "
+                        f"{primary.primary_issue!r}"
+                    )
                 grounding = outcome_grounding_issues(outcome, facts)
                 invariants = policy_invariant_issues(outcome, facts)
                 if grounding or invariants:

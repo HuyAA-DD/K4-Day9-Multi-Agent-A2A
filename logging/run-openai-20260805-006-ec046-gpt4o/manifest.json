@@ -1,0 +1,17 @@
+{
+  "run_id": "run-openai-20260805-006-ec046-gpt4o",
+  "status": "success",
+  "cases_total": 1,
+  "cases_succeeded": 1,
+  "cases_failed": 0,
+  "cases_needing_review": 0,
+  "cases": [
+    {
+      "case_id": "EC_046",
+      "status": "success",
+      "phase": "written",
+      "output_path": "D:\\AIIA\\K4-Day9-Multi-Agent-A2A\\output\\run-openai-20260805-006-ec046-gpt4o\\EC_046.json",
+      "error": null
+    }
+  ]
+}

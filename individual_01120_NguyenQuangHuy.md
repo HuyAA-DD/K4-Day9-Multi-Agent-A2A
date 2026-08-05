@@ -74,7 +74,7 @@ Việc chọn model là khó khăn lớn nhất của bài vì model vừa phả
 
 ## 5. Lần nộp duy nhất có điểm và lỗi rule-based
 
-Lần nộp duy nhất mà hệ thống chấm trả về điểm là bộ 50 output được sinh trong giai đoạn kiến trúc đầu. Tuy nhiên, lần này bị đánh dấu **rule-based**, vì vậy kết quả đó không thể hiện đúng yêu cầu trọng tâm của bài về multi-agent dùng model để đưa ra quyết định.
+Lần nộp duy nhất mà hệ thống chấm trả về điểm là bộ 50 output được sinh trong giai đoạn kiến trúc đầu, với kết quả **67.2893 điểm**. Tuy nhiên, lần này bị đánh dấu **rule-based**, vì vậy số điểm trên chưa phản ánh đầy đủ yêu cầu trọng tâm của bài về multi-agent dùng model để đưa ra quyết định.
 
 Nguyên nhân gốc có thể xác minh trực tiếp trong commit `5c11aa3`:
 
@@ -95,12 +95,13 @@ Sau lỗi này, tôi đã thay đổi hướng triển khai:
 
 Tuy nhiên, phiên bản hiện tại vẫn còn rủi ro bị đánh giá rule-based vì `validation/policy.py` đang chứa mapping invariant khá chi tiết cho từng primary issue. Dù hàm này chỉ kiểm tra lựa chọn của model và không trực tiếp chọn primary issue, ranh giới này cần tiếp tục được làm gọn và giải thích rõ trước lần nộp tiếp theo.
 
-Repo không lưu ảnh hoặc JSON phản hồi từ leaderboard, nên tôi không ghi một con số điểm cụ thể để tránh báo cáo sai bằng chứng. Thông tin chắc chắn có thể xác nhận là: đây là lần duy nhất có điểm và lần đó bị gắn lỗi rule-based.
+Đây là lần nộp duy nhất của tôi được leaderboard ghi nhận điểm. Kết quả cụ thể là **67.2893 điểm**, đồng thời submission bị gắn lỗi **rule-based**. Repo hiện không lưu ảnh hoặc JSON phản hồi từ leaderboard, vì vậy con số này được ghi lại theo kết quả tôi trực tiếp nhận được trên hệ thống chấm.
 
 ## 6. Kết quả hiện tại
 
 | Hạng mục | Kết quả hiện tại | Bằng chứng |
 | --- | --- | --- |
+| Lần nộp được chấm điểm | **67.2893 điểm**, bị đánh dấu **rule-based** | Kết quả tôi trực tiếp nhận được trên hệ thống chấm; repo chưa lưu artifact phản hồi từ leaderboard. |
 | Ruff/static checks | Pass | `.venv\Scripts\python.exe -m ruff check src tests` trả về `All checks passed!`. |
 | Test suite offline | 12 test pass | `.venv\Scripts\python.exe -m pytest -q` trả về `12 passed in 4.26s`. |
 | Golden flow 50 case | Pass bằng scripted oracle | `tests/golden/test_all_cases.py` chạy đủ `EC_001` đến `EC_050`, nhưng không gọi model thật. |
