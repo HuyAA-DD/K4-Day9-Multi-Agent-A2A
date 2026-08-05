@@ -1,0 +1,16 @@
+{
+  "model": {
+    "name": "Qwen/Qwen3.5-9B",
+    "parameter_size": "9B",
+    "shared_across_agents": true
+  },
+  "framework": {
+    "name": "custom-supervisor-dag",
+    "language": "Python"
+  },
+  "runtime": {
+    "llm_api": "OpenAI-compatible",
+    "execution": "async DAG",
+    "status": "scaffolded"
+  }
+}
