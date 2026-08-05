@@ -1,123 +1,114 @@
-"""Serialized GGUF inference for the shared cached Qwen3 model."""
+"""Async structured-output client shared by model-backed policy roles."""
 
-import asyncio
 import json
-from typing import Any
+import re
+from dataclasses import dataclass, field
+from typing import Any, Protocol
 
-from ecommerce_dispute.config import MODEL_FILE, MODEL_NAME, Settings
+from openai import AsyncOpenAI
+
+from ecommerce_dispute.config import Settings
 
 
 class ModelResponseError(RuntimeError):
-    """Raised when the cached model cannot be loaded or invoked."""
+    """Raised when a hosted model request cannot produce a JSON object."""
 
 
-class LocalModelClient:
-    """One local model instance shared safely by every role-specific agent."""
+@dataclass(frozen=True, slots=True)
+class ModelCompletion:
+    content: dict[str, Any]
+    model_id: str
+    request_id: str | None = None
+    usage: dict[str, int] = field(default_factory=dict)
 
-    def __init__(self, settings: Settings) -> None:
-        self.settings = settings
-        self._inference_lock = asyncio.Lock()
 
-        try:
-            from huggingface_hub import hf_hub_download
-            from llama_cpp import Llama
-        except ImportError as exc:
-            raise ModelResponseError(
-                "Local model dependencies are missing; run pip install -r requirements.txt"
-            ) from exc
-
-        try:
-            model_path = hf_hub_download(
-                MODEL_NAME,
-                MODEL_FILE,
-                local_files_only=True,
-            )
-            self.model = Llama(
-                model_path=model_path,
-                n_ctx=settings.model_context_tokens,
-                n_threads=settings.model_threads,
-                n_gpu_layers=settings.model_gpu_layers,
-                verbose=False,
-            )
-        except Exception as exc:  # backend errors vary by platform
-            raise ModelResponseError(
-                f"Could not load {MODEL_NAME}/{MODEL_FILE} from the local cache: {exc}"
-            ) from exc
+class StructuredModelClient(Protocol):
+    settings: Settings
 
     @property
-    def device_name(self) -> str:
-        return "llama.cpp-cpu" if self.settings.model_gpu_layers == 0 else "llama.cpp-gpu-offload"
+    def device_name(self) -> str: ...
 
     async def complete_json(
         self,
         system_prompt: str,
         user_payload: str,
-        max_new_tokens: int | None = None,
-        response_schema: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        async with self._inference_lock:
-            try:
-                content = await asyncio.to_thread(
-                    self._generate,
-                    system_prompt,
-                    user_payload,
-                    max_new_tokens,
-                    response_schema,
-                )
-            except Exception as exc:  # inference errors vary by backend
-                raise ModelResponseError(f"Local Qwen review failed: {exc}") from exc
+        *,
+        model: str,
+        response_schema: dict[str, Any],
+        max_output_tokens: int | None = None,
+    ) -> ModelCompletion: ...
 
-        if not content.strip():
-            raise ModelResponseError("Local model returned no text")
-        return self._parse_json_object(content)
 
-    def _generate(
+class OpenAIModelClient:
+    """OpenAI Chat Completions adapter with strict JSON Schema decoding."""
+
+    def __init__(self, settings: Settings) -> None:
+        if not settings.api_key:
+            raise ModelResponseError("OPENAI_API_KEY is missing from the environment")
+        self.settings = settings
+        self.client = AsyncOpenAI(
+            api_key=settings.api_key,
+            base_url=settings.base_url,
+            timeout=settings.request_timeout_seconds,
+        )
+
+    @property
+    def device_name(self) -> str:
+        return "openai-hosted-api"
+
+    async def complete_json(
         self,
         system_prompt: str,
         user_payload: str,
-        max_new_tokens: int | None,
-        response_schema: dict[str, Any] | None,
-    ) -> str:
-        response_format: dict[str, Any] = {"type": "json_object"}
-        if response_schema is not None:
-            response_format["schema"] = response_schema
-        response = self.model.create_chat_completion(
-            messages=[
-                {"role": "system", "content": "/no_think\n" + system_prompt},
-                {"role": "user", "content": user_payload},
-            ],
-            response_format=response_format,
-            temperature=0.7,
-            top_p=0.8,
-            top_k=20,
-            min_p=0.0,
-            presence_penalty=1.5,
-            seed=0,
-            max_tokens=max_new_tokens or self.settings.max_output_tokens,
-        )
-        content = response["choices"][0]["message"]["content"]
-        if not isinstance(content, str):
-            raise ModelResponseError("llama.cpp returned no text content")
-        return content
-
-    @staticmethod
-    def _parse_json_object(content: str) -> dict[str, Any]:
-        text = content.strip()
-        if text.startswith("```"):
-            lines = text.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            text = "\n".join(lines).strip()
+        *,
+        model: str,
+        response_schema: dict[str, Any],
+        max_output_tokens: int | None = None,
+    ) -> ModelCompletion:
+        raw_name = str(response_schema.get("title", "agent_response"))
+        schema_name = re.sub(r"[^a-zA-Z0-9_-]", "_", raw_name)[:64]
         try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            start = text.find("{")
-            end = text.rfind("}")
-            if start < 0 or end <= start:
-                raise ModelResponseError("Model response does not contain a JSON object")
-            parsed = json.loads(text[start : end + 1])
+            response = await self.client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_payload},
+                ],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": schema_name,
+                        "strict": True,
+                        "schema": response_schema,
+                    },
+                },  # type: ignore[arg-type]
+                temperature=self.settings.temperature,
+                max_tokens=max_output_tokens or self.settings.max_output_tokens,
+            )
+        except Exception as exc:  # SDK exception hierarchy varies by release
+            raise ModelResponseError(f"OpenAI model request failed: {exc}") from exc
+
+        choice = response.choices[0].message
+        if not choice.content:
+            refusal = getattr(choice, "refusal", None)
+            detail = f": {refusal}" if refusal else ""
+            raise ModelResponseError(f"OpenAI model returned no JSON content{detail}")
+        try:
+            parsed = json.loads(choice.content)
+        except json.JSONDecodeError as exc:
+            raise ModelResponseError("OpenAI model returned invalid JSON") from exc
         if not isinstance(parsed, dict):
-            raise ModelResponseError("Model response must be a JSON object")
-        return parsed
+            raise ModelResponseError("OpenAI model response must be a JSON object")
+        usage: dict[str, int] = {}
+        if response.usage is not None:
+            usage = {
+                "input_tokens": response.usage.prompt_tokens,
+                "output_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            }
+        return ModelCompletion(
+            content=parsed,
+            model_id=response.model,
+            request_id=response.id,
+            usage=usage,
+        )

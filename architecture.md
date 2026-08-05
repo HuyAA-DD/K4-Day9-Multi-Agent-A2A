@@ -1,44 +1,58 @@
 # Kiến trúc Multi-Agent E-commerce Dispute Resolution
 
+> Tài liệu này mô tả **kiến trúc đích**. Workflow cố định được điều phối bằng code;
+> LLM chỉ được dùng tại các bước cần suy luận nghiệp vụ.
+
 ## 1. Quyết định kiến trúc
 
-Hệ thống dùng **Supervisor DAG**. `Supervisor Agent` sở hữu trạng thái của từng case, điều phối các agent chuyên môn và chỉ cho phép ghi file khi `Verifier Agent` trả kết quả hợp lệ.
+Hệ thống dùng **deterministic workflow orchestrator** quản lý `CaseState` và thực thi một DAG
+có kiểm soát. Orchestrator không phải LLM agent: route tiếp theo được xác định từ phase, dependency
+và trạng thái handoff. Cách này loại bỏ chi phí, độ trễ và rủi ro khi yêu cầu model lặp lại một
+route vốn chỉ có một lựa chọn hợp lệ.
 
-Tất cả agent dùng chung một model local:
+Các bước đọc/join dữ liệu, tính tiền, tính chênh lệch thời gian và dựng typed facts là các
+**domain workers** xác định, không phải model-backed agents. Hai agent suy luận chính là:
 
-```text
-repo: Qwen/Qwen3-1.7B-GGUF
-file: Qwen3-1.7B-Q8_0.gguf
-runtime: llama.cpp qua llama-cpp-python
-device mặc định: CPU
-```
+- `Policy Agent`: sinh quyết định nghiệp vụ từ facts đã kiểm chứng;
+- `Independent Policy Evaluator`: tự suy ra quyết định kỳ vọng từ cùng facts nhưng không được
+  nhìn draft hoặc output của Policy Agent.
 
-Model được nạp một lần từ Hugging Face cache với `local_files_only=True`. Các agent có prompt, tool allowlist và Pydantic output schema riêng nhưng dùng chung model instance; inference được tuần tự hóa để tránh tranh chấp tài nguyên.
+Sau đó, `Deterministic Comparator` so sánh hai structured decisions theo từng semantic field.
+Comparator là thành phần duy nhất được nhìn cả hai quyết định. Việc hai agent đồng ý là một
+cross-check, không được coi là bằng chứng duy nhất về tính đúng; output còn phải qua schema,
+source-grounding, arithmetic và cross-field business invariants.
 
-Policy không được quyết định bằng `if/elif` hay policy engine. `Policy Agent` phải sinh `PolicyDecision` có cấu trúc từ facts đã kiểm chứng. Code chỉ thực hiện các thao tác cơ học: đọc/join dữ liệu, cộng tiền, tính chênh lệch thời gian, kiểm tra schema, giới hạn mảng, nguồn ID/số tiền, projection sang output và ghi file atomic.
+Trong production, Policy Agent và Independent Evaluator nên dùng prompt riêng và model snapshot
+khác nhau để giảm correlated failure. Nếu bài lab buộc dùng chung `gpt-4o-mini`, hai agent vẫn phải
+dùng request/context độc lập và tài liệu phải ghi rõ đây chỉ là **logical independence**, không phải
+model independence.
 
 ## 2. Sơ đồ tổng thể
 
 ```mermaid
 flowchart TD
     IN["input/EC_XXX.json"] --> IV["Input validator"]
-    IV --> SUP["Supervisor Agent<br/>Qwen3-1.7B"]
+    IV --> ORCH["Deterministic Workflow Orchestrator"]
 
-    SUP --> CA["Customer Agent<br/>Qwen3-1.7B"]
-    SUP --> OA["Order & Product Agent<br/>Qwen3-1.7B"]
-    CA --> CF[(CustomerFacts)]
-    OA --> OF[(OrderProductFacts)]
+    ORCH --> CW["Customer Facts Worker"]
+    ORCH --> OW["Order & Product Facts Worker"]
+    CW --> CF[(CustomerFacts)]
+    OW --> OF[(OrderProductFacts)]
 
-    OF --> PA["Payment Agent<br/>Qwen3-1.7B"]
-    OF --> DA["Delivery Agent<br/>Qwen3-1.7B"]
-    PA --> PF[(PaymentFacts)]
-    DA --> DF[(DeliveryFacts)]
+    OF --> PW["Payment Reconciliation Worker"]
+    OF --> DW["Delivery Analysis Worker"]
+    PW --> PF[(PaymentFacts)]
+    DW --> DF[(DeliveryFacts)]
 
-    CF --> PGA["Policy Agent<br/>Qwen3-1.7B"]
-    OF --> PGA
-    PF --> PGA
-    DF --> PGA
-    PGA --> PD[(PolicyDecision)]
+    CF --> VF["Validated Compact Facts"]
+    OF --> VF
+    PF --> VF
+    DF --> VF
+
+    VF --> PA["Policy Agent"]
+    VF --> IE["Independent Policy Evaluator<br/>draft-blind"]
+    PA --> PD[(PolicyDecision)]
+    IE --> ED[(ExpectedPolicyDecision)]
 
     PD --> OB["Mechanical Output Builder"]
     CF --> OB
@@ -47,116 +61,284 @@ flowchart TD
     DF --> OB
     OB --> DRAFT[(Draft CaseOutput)]
 
-    DRAFT --> MV["Mechanical validation gates"]
-    MV --> VA["Verifier Agent<br/>Qwen3-1.7B"]
-    VA -->|independent policy decision agrees| WR["Atomic Output Writer"]
-    VA -->|semantic disagreement| SUP
-    MV -->|source/schema failure| ERR["Case failed; không ghi output"]
-    WR --> OUT["output/EC_XXX.json"]
+    DRAFT --> MV["Mechanical + business invariant gates"]
+    MV -->|pass| CMP["Deterministic Comparator"]
+    PD --> CMP
+    ED --> CMP
 
-    SUP -. trace .-> TR["logging/trace.jsonl"]
-    CA -. trace .-> TR
-    OA -. trace .-> TR
-    PA -. trace .-> TR
-    DA -. trace .-> TR
-    PGA -. trace .-> TR
-    VA -. trace .-> TR
+    CMP -->|all semantic fields agree| WR["Atomic Output Writer"]
+    CMP -->|first disagreement| RETRY["Independent re-evaluation"]
+    RETRY --> PA
+    RETRY --> IE
+    CMP -->|persistent disagreement| ADJ["Adjudicator or needs_review"]
+    ADJ -->|approved decision| OB
+    ADJ -->|unresolved| ERR["Case failed; no current-run output"]
+
+    MV -->|retryable projection error| OB
+    MV -->|source/schema/invariant failure| ERR
+    WR --> OUT["output/<run_id>/EC_XXX.json"]
+
+    ORCH -. state and trace .-> TR["logging/<run_id>/trace.jsonl"]
+    PA -. structured trace .-> TR
+    IE -. structured trace .-> TR
+    CMP -. comparison trace .-> TR
+    ADJ -. adjudication trace .-> TR
 ```
 
 ## 3. Luồng thực thi một case
 
-1. CLI đọc input, kiểm tra `case_id`, `claimed_order_id`, scope và `EC_POLICY_V2`.
-2. Supervisor chọn route hợp lệ của DAG.
-3. Customer Agent và Order & Product Agent truy xuất các nguồn dữ liệu được cấp quyền, rồi model phê duyệt handoff có cấu trúc.
-4. Payment Agent dùng calculator để cộng toàn bộ payment và đối soát với item + freight.
-5. Delivery Agent dùng datetime calculator để tính delivery variance và seller handoff variance.
-6. Policy Agent nhận facts rút gọn và trực tiếp sinh toàn bộ `PolicyDecision` theo prompt `EC_POLICY_V2` cùng JSON Schema.
-7. Output Builder chỉ chiếu facts/decision sang schema đầu ra và dựng evidence ID từ ID nguồn.
-8. Mechanical gates kiểm tra schema, arithmetic, ID nguồn, array limit và sự toàn vẹn của phép chiếu.
-9. Verifier không nhìn draft policy; model tự suy ra một `PolicyDecision` độc lập từ cùng facts. Runtime so sánh hai quyết định theo từng semantic field.
-10. Nếu khác nhau, Supervisor gửi feedback về Policy Agent, tối đa hai vòng policy. Chỉ output đã pass mới được ghi atomic.
+1. CLI đọc input và kiểm tra `case_id`, `claimed_order_id`, investigation scope và
+   `policy_version`.
+2. Orchestrator tạo `CaseState` gắn với `run_id` và chuyển case sang phase `investigating`.
+3. Customer Facts Worker và Order & Product Facts Worker chạy song song, truy xuất dữ liệu qua
+   capability-scoped read-only facades và trả typed facts.
+4. Khi `OrderProductFacts` sẵn sàng, Payment Reconciliation Worker và Delivery Analysis Worker
+   chạy song song. Mọi phép tính tiền và timestamp được thực hiện bằng calculator xác định.
+5. Orchestrator validate bốn nhóm facts và tạo một projection rút gọn chỉ gồm dữ liệu cần thiết
+   cho quyết định policy.
+6. Policy Agent và Independent Policy Evaluator nhận cùng validated facts qua hai request độc lập.
+   Evaluator không nhận `PolicyDecision`, draft output hoặc feedback chứa đáp án của Policy Agent.
+7. Output Builder chiếu facts và `PolicyDecision` sang `CaseOutput`; component này không đưa ra
+   quyết định nghiệp vụ.
+8. Mechanical gates kiểm tra schema, arithmetic, ID/số tiền nguồn, giới hạn mảng, phép chiếu và
+   cross-field business invariants.
+9. Khi mechanical gates pass, Comparator so sánh `PolicyDecision` và `ExpectedPolicyDecision`
+   theo từng semantic field và tạo `VerificationReport`.
+10. Nếu khác nhau lần đầu, hai agent được re-evaluate độc lập. Feedback chỉ mô tả field bất đồng,
+    không tiết lộ giá trị của agent còn lại.
+11. Nếu vẫn bất đồng, case được chuyển cho Adjudicator dùng prompt/model độc lập hoặc mang trạng
+    thái `needs_review`. Không tự động ép Policy Agent sửa theo Evaluator.
+12. Chỉ output pass toàn bộ gates và comparator/adjudication mới được ghi atomic vào namespace của
+    run hiện tại.
 
-## 4. Vai trò và quyền truy cập
+## 4. Thành phần, trách nhiệm và quyền truy cập
 
-| Agent | Đầu vào | Quyền/tool | Handoff |
+| Thành phần | Đầu vào | Quyền/tool | Đầu ra |
 |---|---|---|---|
-| Supervisor | phase và trạng thái handoff | xem state, dispatch, yêu cầu correction | route ID |
-| Customer | claimed order ID, scope history | customer/order-history facade | `CustomerFacts` |
-| Order & Product | claimed order ID, product scope | order/item/product/seller facade | `OrderProductFacts` |
-| Payment | `OrderProductFacts` | payment facade, money calculator | `PaymentFacts` |
-| Delivery | `OrderProductFacts` | datetime calculator | `DeliveryFacts` |
-| Policy | bốn nhóm facts đã validate | chỉ xem facts | `PolicyDecision` |
-| Verifier | facts và draft đã qua mechanical gates | validators, suy luận policy độc lập | `VerificationReport` |
+| Workflow Orchestrator | phase, dependency, handoff status | chuyển phase, dispatch worker/agent, retry, fail | route và `CaseState` |
+| Customer Facts Worker | claimed order ID, history scope | customer/order-history facade | `CustomerFacts` |
+| Order & Product Facts Worker | claimed order ID, product scope | order/item/product/seller facade | `OrderProductFacts` |
+| Payment Reconciliation Worker | `OrderProductFacts` | payment facade, money calculator | `PaymentFacts` |
+| Delivery Analysis Worker | `OrderProductFacts` | datetime calculator | `DeliveryFacts` |
+| Policy Agent | validated compact facts | chỉ xem facts và policy prompt | `PolicyDecision` |
+| Independent Policy Evaluator | cùng validated compact facts | prompt/model riêng; không thấy draft | `ExpectedPolicyDecision` |
+| Mechanical Validator | facts, draft, source references | schema, arithmetic, grounding, invariants | `MechanicalReport` |
+| Deterministic Comparator | hai policy decisions đã validate | field-by-field comparison | `VerificationReport` |
+| Adjudicator | facts và báo cáo bất đồng | model độc lập hoặc human review | quyết định phê duyệt hoặc `needs_review` |
+| Atomic Output Writer | output đã được phê duyệt | chỉ ghi namespace của run hiện tại | output JSON |
 
-Không agent nào được truy cập tool ngoài allowlist. Policy và Verifier không được đọc trực tiếp CSV; chúng chỉ nhận typed facts từ các agent điều tra.
+Không component nào được truy cập ngoài capability allowlist. Policy Agent, Evaluator và
+Adjudicator không được đọc trực tiếp CSV; chúng chỉ nhận typed facts tối thiểu cần thiết. Chỉ
+Orchestrator được cập nhật `CaseState`; kết quả song song được trả về dưới dạng immutable handoff
+rồi Orchestrator mới commit vào state.
 
-## 5. Ranh giới “không rule-based”
+## 5. Ranh giới giữa code xác định và suy luận bằng model
 
-Các thao tác sau là cơ học và được code thực hiện để tránh LLM làm sai số:
+Code chịu trách nhiệm cho các thao tác có một đáp án khách quan:
 
-- join theo khóa dữ liệu và giữ thứ tự nguồn;
-- cộng/round tiền, trừ timestamp;
-- dựng stable ID và evidence ID;
-- Pydantic/JSON Schema validation;
-- kiểm tra ID và số tiền do model trả có tồn tại trong facts;
-- so sánh hai structured decisions và ghi file atomic.
+- validate input, join theo khóa và giữ thứ tự nguồn;
+- cộng/round tiền và trừ timestamp;
+- tạo stable ID, evidence ID và source reference;
+- dựng, validate và giới hạn typed handoff;
+- kiểm tra ID/số tiền model trả có tồn tại trong facts;
+- projection từ facts/decision sang output;
+- kiểm tra cross-field invariants;
+- so sánh hai structured decisions;
+- quản lý phase, retry, timeout, idempotency và atomic write.
 
-Các quyết định nghiệp vụ sau bắt buộc do model tạo:
+Model chịu trách nhiệm cho các quyết định semantic được yêu cầu bởi `EC_POLICY_V2`:
 
 - primary issue và thứ tự ưu tiên policy;
 - secondary issues;
 - case status, root cause và responsible parties;
-- refund cần áp dụng và resolution actions;
-- semantic verification độc lập.
+- refund và resolution actions;
+- đánh giá policy độc lập và adjudication khi cần.
 
-Trong production không tồn tại `policies/ec_policy_v2.py`, bảng candidate hoặc chuỗi `if/elif` chọn kết quả nghiệp vụ.
+Nếu `EC_POLICY_V2` là một bảng luật cố định và dự án không bắt buộc model-driven policy, lựa chọn
+an toàn hơn cho production là triển khai policy bằng code và chỉ dùng LLM để giải thích kết quả.
+Nếu bài toán bắt buộc LLM đưa ra policy, các deterministic invariants bên dưới vẫn phải được giữ.
 
-## 6. Hợp đồng dữ liệu
+## 6. Hợp đồng dữ liệu và business invariants
 
-Mỗi handoff dùng Pydantic model với `extra="forbid"`. Các enum policy, giới hạn array, tiền không âm và confidence `[0,1]` được khóa bằng JSON Schema ngay trong lúc llama.cpp decode. Model output sai schema, dùng ID/số tiền không có trong facts hoặc chứa phần tử trùng sẽ bị retry hữu hạn rồi fail case.
+Mỗi handoff dùng Pydantic model với `extra="forbid"`. Enum policy, array limit, tiền không âm,
+confidence `[0,1]` và các field bắt buộc được khóa bằng strict JSON Schema. Mọi schema đều có
+`schema_version`; mọi quyết định đều mang `policy_version`, `prompt_version` và source-fact hash.
 
-`CaseOutput` giữ nguyên schema trong README. Related orders chỉ nằm trong `customer_context`, không được đưa vào `affected_entities`.
+Ngoài field-level validation, Mechanical Validator phải kiểm tra tối thiểu:
 
-## 7. Retry, trace và privacy
+- `no_action` đi cùng refund bằng `0` và không có action hoàn tiền;
+- `action_required` có ít nhất một resolution action phù hợp;
+- seller chịu trách nhiệm phải tồn tại trong `OrderProductFacts`;
+- refund chỉ được lấy từ các source amount cho phép và khớp loại resolution;
+- primary issue, case status, root cause, responsible parties và action không mâu thuẫn nhau;
+- late-delivery outcome phù hợp với delivery variance và seller handoff facts;
+- canceled/unavailable paid outcome có payment dương;
+- split-payment outcome có nhiều payment row và đã reconciled;
+- mọi evidence ID tồn tại trong source references;
+- các collection không trùng và không vượt giới hạn schema;
+- related orders chỉ nằm trong `customer_context`, không xuất hiện trong `affected_entities`.
 
-- Mỗi model decision có tối đa ba lần sửa schema/grounding.
-- Policy có tối đa hai vòng khi Verifier đưa semantic disagreement.
-- Lỗi terminal không tạo hoặc ghi đè output của case đó.
-- `logging/trace.jsonl` được tạo mới cho mỗi run và ghi route, handoff cùng structured model decisions; không ghi system prompt, user prompt hoàn chỉnh, raw CSV row hay API key.
-- `logging/metadata.json` ghi model, file GGUF, quantization, runtime, device, run ID và số case thành công/thất bại.
-- Inference chạy local offline; code không dùng endpoint hay API key.
+Model output sai schema hoặc grounding được retry hữu hạn. Vi phạm invariant xác định không được
+“sửa bằng đồng thuận LLM”; case phải quay về đúng owner component hoặc fail rõ nguyên nhân.
 
-## 8. Cấu trúc source
+## 7. State, retry và failure handling
+
+`CaseState` có state machine rõ ràng:
+
+```text
+received
+  -> investigating
+  -> facts_ready
+  -> deciding
+  -> mechanically_validated
+  -> comparing
+  -> verified | needs_review | failed
+  -> written
+```
+
+Quy tắc vận hành:
+
+- Orchestrator là single writer của state; worker/agent không mutate state trực tiếp.
+- Mỗi handoff có `run_id`, `case_id`, `attempt`, `schema_version` và idempotency key.
+- Lỗi network/rate limit được retry tối đa ba lần với exponential backoff và jitter.
+- Schema/grounding error của model được retry tối đa ba lần trong cùng agent.
+- Semantic disagreement được re-evaluate độc lập tối đa một vòng trước adjudication.
+- Data-integrity hoặc invariant failure không retry mù quáng.
+- Mỗi case có timeout tổng ngoài timeout của từng model request.
+- Lỗi của một case không hủy các case độc lập còn lại.
+- Không ghi hoặc ghi đè output khi case chưa verified.
+
+Output được đặt dưới `output/<run_id>/` và đi kèm run manifest. Vì vậy một output cũ không thể bị
+nhầm là kết quả thành công của run hiện tại. Manifest ghi rõ trạng thái `success`, `failed` hoặc
+`needs_review` của từng case.
+
+## 8. Concurrency và khả năng mở rộng
+
+- Customer/Order workers chạy song song.
+- Payment/Delivery workers chạy song song sau khi Order facts sẵn sàng.
+- Policy Agent và Independent Evaluator có thể chạy song song sau khi toàn bộ facts được validate.
+- Nhiều case có thể chạy đồng thời qua bounded semaphore; concurrency được cấu hình theo rate
+  limit của provider.
+- Model client dùng connection pool chung, nhưng retry budget và timeout được theo dõi riêng cho
+  từng case/request.
+- Orchestrator áp dụng backpressure thay vì tạo toàn bộ request cùng lúc.
+
+Không dùng concurrency không giới hạn. Các operation ghi trace, manifest và output phải an toàn
+khi nhiều case hoàn tất đồng thời.
+
+## 9. Trace, observability và reproducibility
+
+Mỗi run có namespace riêng:
+
+```text
+logging/<run_id>/trace.jsonl
+logging/<run_id>/metadata.json
+logging/<run_id>/manifest.json
+output/<run_id>/EC_XXX.json
+```
+
+Trace ghi:
+
+- run ID, case ID, component/agent, phase và attempt;
+- route, handoff type, schema version và source-fact hash;
+- exact model ID/snapshot, prompt version/hash và policy version;
+- request ID của provider, latency, token usage và retry category;
+- structured decision đã được redaction;
+- comparator result, invariant failure và terminal status.
+
+Trace không ghi API key, system prompt đầy đủ, user prompt đầy đủ hoặc raw CSV row. Metadata không
+ghi parameter-count ước lượng không được nhà cung cấp công bố; trường này nên là `unknown` hoặc
+`not_disclosed`. Chỉ cố định model alias là chưa đủ tái lập, vì vậy cần lưu exact snapshot/version
+khi provider hỗ trợ.
+
+## 10. Privacy và security
+
+Facts gửi tới hosted model phải được giảm thiểu và phân loại trước khi truyền:
+
+- chỉ gửi field cần cho policy, không gửi raw row hoặc nội dung không liên quan;
+- pseudonymize customer/order/seller IDs khi không cần giá trị gốc để suy luận;
+- mã hóa dữ liệu khi truyền và khi lưu;
+- giới hạn quyền đọc trace/output theo vai trò;
+- cấu hình retention và cơ chế xóa theo run/case;
+- không ghi credential hoặc provider response thô;
+- ghi nhận data residency, DPA và phê duyệt truyền dữ liệu ra ngoài môi trường;
+- redaction cả structured decisions trước khi ghi log.
+
+Mapping từ pseudonymous ID về source ID chỉ nằm trong trusted deterministic layer, không được gửi
+cho model nếu không cần thiết.
+
+## 11. Cấu trúc source đề xuất
 
 ```text
 src/ecommerce_dispute/
-├── agents/          # Supervisor và sáu specialist agents
-├── data/            # Read-only Olist repository
-├── llm/             # shared llama.cpp client
-├── orchestration/   # CaseState, DAG, runner, output builder/writer
-├── schemas/         # input, handoff và output contracts
-├── tools/           # scoped facades, calculators, validators, evidence
-├── tracing/         # JSONL trace writer
-├── config.py        # fixed model/file và runtime settings
-└── main.py          # CLI
+├── agents/
+│   ├── policy.py                 # Policy Agent
+│   ├── evaluator.py              # draft-blind Independent Evaluator
+│   └── adjudicator.py            # optional model/human-review adapter
+├── workers/
+│   ├── customer.py               # deterministic facts worker
+│   ├── order_product.py
+│   ├── payment.py
+│   └── delivery.py
+├── data/                          # read-only Olist repository
+├── llm/                           # structured-model protocol and clients
+├── orchestration/
+│   ├── workflow.py                # deterministic DAG and state transitions
+│   ├── state.py
+│   ├── runner.py
+│   ├── comparator.py
+│   ├── output_builder.py
+│   └── output_writer.py
+├── schemas/                       # versioned input, facts, decisions, reports
+├── validation/                    # schema, grounding and business invariants
+├── tools/                         # scoped facades, calculators, evidence
+├── tracing/                       # per-run trace, metadata and manifest
+├── config.py
+└── main.py
 
-prompts/             # role-specific system prompts
-tests/               # unit và integration tests với scripted model
-input/               # EC_001.json ... EC_050.json
-output/              # verified case outputs
-logging/             # trace.jsonl và metadata.json
+prompts/
+├── policy_agent.md
+├── independent_evaluator.md
+└── adjudicator.md
+
+tests/
+├── unit/                          # calculators, validators, state transitions
+├── contract/                      # schema and handoff compatibility
+├── golden/                        # EC_POLICY_V2 expected outcomes
+├── integration/                   # complete DAG with scripted model
+└── failure/                       # retry, timeout, disagreement, stale output
 ```
 
-## 9. Runtime model
+## 12. Runtime model và cấu hình
+
+Các role dùng cấu hình riêng thay vì hard-code một model chung:
 
 ```text
-model: Qwen/Qwen3-1.7B-GGUF
-file: Qwen3-1.7B-Q8_0.gguf
-parameters: 1.7B
-quantization: Q8_0
-source: Hugging Face cache, local_files_only=True
-context: 4096 tokens
-generation: Qwen3 non-thinking sampling + llama.cpp JSON Schema constrained decoding
+POLICY_MODEL=<pinned model snapshot>
+EVALUATOR_MODEL=<different pinned model snapshot>
+ADJUDICATOR_MODEL=<optional stronger/different model>
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_TIMEOUT_SECONDS=60
+CASE_TIMEOUT_SECONDS=<bounded total timeout>
+MAX_CASE_CONCURRENCY=<provider-aware limit>
 ```
 
-`MODEL_GPU_LAYERS=0` chạy CPU. Có thể tăng số layer offload khi máy đã có CUDA runtime tương thích; model name và filename vẫn cố định trong source để metadata và kết quả có thể tái lập.
+Trong bài lab, `POLICY_MODEL` và `EVALUATOR_MODEL` có thể cùng là `gpt-4o-mini` nếu đó là ràng
+buộc đề bài. Trong production, nên dùng evaluator khác model/snapshot hoặc thêm deterministic
+policy oracle cho các quyết định tài chính. Mọi run phải ghi exact resolved model ID và phiên bản
+prompt/schema vào metadata.
+
+## 13. Tiêu chí chấp nhận kiến trúc
+
+Kiến trúc chỉ được coi là sẵn sàng khi:
+
+1. route cố định không phụ thuộc vào LLM;
+2. domain facts có thể tái lập hoàn toàn từ cùng input/source;
+3. Independent Evaluator không nhận draft hoặc đáp án của Policy Agent;
+4. Comparator là deterministic và có test theo từng semantic field;
+5. cross-field invariants có unit test và golden cases;
+6. disagreement kéo dài không tự động ghi output;
+7. mỗi run phân biệt được output mới, output cũ và case thất bại;
+8. concurrency, retry, timeout và rate limit đều có giới hạn;
+9. trace đủ để audit nhưng không chứa credential/raw source;
+10. model, prompt, schema và policy version được ghi chính xác để tái lập kết quả.

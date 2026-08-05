@@ -1,9 +1,9 @@
 {
   "model": {
-    "name": "Qwen/Qwen3-1.7B-GGUF",
-    "parameter_size": "1.7B",
-    "file": "Qwen3-1.7B-Q8_0.gguf",
-    "quantization": "Q8_0",
+    "name": "gpt-4o-mini",
+    "parameter_size": "approximately 8B (unofficial estimate)",
+    "parameter_count_source": "unofficial estimate accepted by project owner",
+    "provider": "OpenAI API",
     "shared_across_agents": true,
     "enabled": true,
     "decision_mode": "causal_structured_outputs"
@@ -13,13 +13,13 @@
     "language": "Python"
   },
   "runtime": {
-    "llm_runtime": "llama.cpp-local-offline",
-    "model_device": "llama.cpp-cpu",
+    "llm_runtime": "openai-chat-completions",
+    "model_device": "openai-hosted-api",
     "execution": "async DAG",
     "python": "3.11.9",
     "platform": "Windows-10-10.0.26200-SP0",
-    "run_id": "5a92b627c76d43dbba0ba940bddfd3c1",
-    "completed_at": "2026-08-05T13:53:28.995176+00:00",
+    "run_id": "d105a1cafff147139958e09df6a8fa4a",
+    "completed_at": "2026-08-05T14:48:14.125562+00:00",
     "cases_total": 1,
     "cases_succeeded": 0,
     "cases_failed": 1,

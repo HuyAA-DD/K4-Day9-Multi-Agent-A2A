@@ -1,4 +1,4 @@
-"""Command-line entry point for the 50-case Supervisor DAG."""
+"""Command-line entry point for the versioned dispute workflow."""
 
 import argparse
 import asyncio
@@ -7,19 +7,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from ecommerce_dispute.config import (
-    DATA_DIR,
-    INPUT_DIR,
-    OUTPUT_DIR,
-    PROJECT_ROOT,
-    TRACE_PATH,
-    Settings,
-)
+from ecommerce_dispute.config import DATA_DIR, INPUT_DIR, PROJECT_ROOT, Settings
 from ecommerce_dispute.data import OlistRepository
-from ecommerce_dispute.llm import LocalModelClient
+from ecommerce_dispute.llm import OpenAIModelClient
 from ecommerce_dispute.orchestration.runner import CaseRunResult, DisputeRunner
-from ecommerce_dispute.schemas.case import CaseInput
-from ecommerce_dispute.tracing import TraceWriter
+from ecommerce_dispute.schemas import CaseInput
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,7 +19,8 @@ def build_parser() -> argparse.ArgumentParser:
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--case", help="Run one case ID, for example EC_001")
     selection.add_argument("--all", action="store_true", help="Run all 50 input cases")
-    parser.add_argument("--no-write", action="store_true", help="Validate without writing output")
+    parser.add_argument("--no-write", action="store_true", help="Verify without writing output")
+    parser.add_argument("--run-id", help="Optional stable run ID for controlled reruns")
     return parser
 
 
@@ -42,8 +35,7 @@ def select_cases(case_id: str | None, run_all: bool) -> list[CaseInput]:
     if run_all:
         paths = sorted(INPUT_DIR.glob("EC_*.json"))
         expected = [f"EC_{index:03}.json" for index in range(1, 51)]
-        actual = [path.name for path in paths]
-        if actual != expected:
+        if [path.name for path in paths] != expected:
             raise ValueError("input/ must contain exactly EC_001.json through EC_050.json")
     else:
         normalized = (case_id or "").upper()
@@ -57,28 +49,25 @@ def select_cases(case_id: str | None, run_all: bool) -> list[CaseInput]:
 async def async_main(args: argparse.Namespace) -> int:
     load_dotenv(PROJECT_ROOT / ".env")
     settings = Settings.from_environment()
-    cases = select_cases(args.case, args.all)
-
     repository = OlistRepository(DATA_DIR)
     repository.load()
-    trace_writer = TraceWriter(TRACE_PATH)
-    model_client = LocalModelClient(settings)
+    model_client = OpenAIModelClient(settings)
 
     def report_progress(completed: int, total: int, result: CaseRunResult) -> None:
-        detail = "success" if result.status == "success" else f"failed: {result.error}"
+        detail = result.status if result.error is None else f"{result.status}: {result.error}"
         print(f"[{completed:02}/{total:02}] {result.case_id}: {detail}", flush=True)
 
     runner = DisputeRunner(
-        repository=repository,
-        trace_writer=trace_writer,
-        model_client=model_client,
-        output_dir=OUTPUT_DIR,
+        repository,
+        model_client,
+        settings=settings,
+        run_id=args.run_id,
         write_outputs=not args.no_write,
         progress_callback=report_progress,
     )
-    results = await runner.run_cases(cases)
+    results = await runner.run_cases(select_cases(args.case, args.all))
     succeeded = sum(result.status == "success" for result in results)
-    print(f"Completed {succeeded}/{len(results)} cases")
+    print(f"Run {runner.run_id}: completed {succeeded}/{len(results)} cases")
     return 0 if succeeded == len(results) else 1
 
 

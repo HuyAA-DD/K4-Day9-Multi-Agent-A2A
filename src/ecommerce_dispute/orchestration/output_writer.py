@@ -1,34 +1,39 @@
-"""Atomic writer restricted to verified CaseOutput objects."""
+"""Atomic writer restricted to fully verified outputs in the current run namespace."""
 
 import os
 import tempfile
 from pathlib import Path
 
-from ecommerce_dispute.schemas.output import CaseOutput
+from ecommerce_dispute.schemas import CaseOutput, MechanicalReport, VerificationReport
 
 
-def write_verified_output(output: CaseOutput, output_dir: Path) -> Path:
-    """Write one output atomically after all verification gates have passed."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-    destination = output_dir / f"{output.case_id}.json"
-    serialized = output.model_dump_json(indent=2) + "\n"
-
-    temporary_path: Path | None = None
+def write_verified_output(
+    output: CaseOutput,
+    output_root: Path,
+    run_id: str,
+    mechanical: MechanicalReport,
+    verification: VerificationReport,
+) -> Path:
+    if mechanical.status != "pass" or verification.status != "pass":
+        raise ValueError("Output writer accepts only mechanically and semantically verified output")
+    run_dir = output_root / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    destination = run_dir / f"{output.case_id}.json"
+    temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
-            dir=output_dir,
+            dir=run_dir,
             prefix=f".{output.case_id}.",
             suffix=".tmp",
             delete=False,
         ) as stream:
-            stream.write(serialized)
-            temporary_path = Path(stream.name)
-        os.replace(temporary_path, destination)
+            stream.write(output.model_dump_json(indent=2))
+            stream.write("\n")
+            temporary = Path(stream.name)
+        os.replace(temporary, destination)
     finally:
-        if temporary_path is not None and temporary_path.exists():
-            temporary_path.unlink()
-
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
     return destination
-

@@ -1,0 +1,360 @@
+{
+  "run_id": "run-full-001",
+  "status": "partial_failure",
+  "cases_total": 50,
+  "cases_succeeded": 1,
+  "cases_failed": 49,
+  "cases_needing_review": 0,
+  "cases": [
+    {
+      "case_id": "EC_001",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "policy failed after 3 attempts: The model-selected primary issue is not eligible for the validated facts"
+    },
+    {
+      "case_id": "EC_002",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['repeat_customer']; Value is inconsistent with the selected primary issue: ['refund_freight']"
+    },
+    {
+      "case_id": "EC_003",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['refund_freight']"
+    },
+    {
+      "case_id": "EC_004",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['issue_full_refund']"
+    },
+    {
+      "case_id": "EC_005",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['refund_freight']"
+    },
+    {
+      "case_id": "EC_006",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['refund_freight']"
+    },
+    {
+      "case_id": "EC_007",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: The model-selected primary issue is not eligible for the validated facts"
+    },
+    {
+      "case_id": "EC_008",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['explain_valid_split_payment']"
+    },
+    {
+      "case_id": "EC_009",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['issue_full_refund']"
+    },
+    {
+      "case_id": "EC_010",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['explain_valid_split_payment']"
+    },
+    {
+      "case_id": "EC_011",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['issue_full_refund']"
+    },
+    {
+      "case_id": "EC_012",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['issue_full_refund']"
+    },
+    {
+      "case_id": "EC_013",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['multi_item_order']; Value is inconsistent with the selected primary issue: ['refund_freight']"
+    },
+    {
+      "case_id": "EC_014",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['refund_freight']"
+    },
+    {
+      "case_id": "EC_015",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "policy failed after 3 attempts: Value is inconsistent with the selected primary issue: ['explain_valid_split_payment']"
+    },
+    {
+      "case_id": "EC_016",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: The model-selected primary issue is not eligible for the validated facts"
+    },
+    {
+      "case_id": "EC_017",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['refund_freight']"
+    },
+    {
+      "case_id": "EC_018",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "policy failed after 3 attempts: The model-selected primary issue is not eligible for the validated facts"
+    },
+    {
+      "case_id": "EC_019",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['refund_freight']"
+    },
+    {
+      "case_id": "EC_020",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['refund_freight']"
+    },
+    {
+      "case_id": "EC_021",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['reject_late_refund']"
+    },
+    {
+      "case_id": "EC_022",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "policy failed after 3 attempts: Value is inconsistent with the selected primary issue: ['multi_item_order', 'repeat_customer']"
+    },
+    {
+      "case_id": "EC_023",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['refund_freight']"
+    },
+    {
+      "case_id": "EC_024",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['issue_full_refund']"
+    },
+    {
+      "case_id": "EC_025",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: The model-selected primary issue is not eligible for the validated facts"
+    },
+    {
+      "case_id": "EC_026",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['issue_full_refund']"
+    },
+    {
+      "case_id": "EC_027",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: The model-selected primary issue is not eligible for the validated facts"
+    },
+    {
+      "case_id": "EC_028",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['issue_full_refund']"
+    },
+    {
+      "case_id": "EC_029",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['explain_valid_split_payment']"
+    },
+    {
+      "case_id": "EC_030",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['issue_full_refund']"
+    },
+    {
+      "case_id": "EC_031",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['issue_full_refund']"
+    },
+    {
+      "case_id": "EC_032",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['refund_freight']"
+    },
+    {
+      "case_id": "EC_033",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['issue_full_refund']"
+    },
+    {
+      "case_id": "EC_034",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['issue_full_refund']"
+    },
+    {
+      "case_id": "EC_035",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['issue_full_refund']"
+    },
+    {
+      "case_id": "EC_036",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['explain_valid_split_payment']"
+    },
+    {
+      "case_id": "EC_037",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['refund_freight']"
+    },
+    {
+      "case_id": "EC_038",
+      "status": "success",
+      "phase": "written",
+      "output_path": "D:\\AIIA\\K4-Day9-Multi-Agent-A2A\\output\\run-full-001\\EC_038.json",
+      "error": null
+    },
+    {
+      "case_id": "EC_039",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['refund_freight']"
+    },
+    {
+      "case_id": "EC_040",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['refund_freight']"
+    },
+    {
+      "case_id": "EC_041",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "policy failed after 3 attempts: Value is inconsistent with the selected primary issue: ['explain_valid_split_payment']"
+    },
+    {
+      "case_id": "EC_042",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "policy failed after 3 attempts: Value is inconsistent with the selected primary issue: ['repeat_customer']; Value is inconsistent with the selected primary issue: ['refund_freight', 'review_seller_handoff', 'verify_refund_completion']"
+    },
+    {
+      "case_id": "EC_043",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "policy failed after 3 attempts: Value is inconsistent with the selected primary issue: []"
+    },
+    {
+      "case_id": "EC_044",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "policy failed after 3 attempts: The model-selected primary issue is not eligible for the validated facts"
+    },
+    {
+      "case_id": "EC_045",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "policy failed after 3 attempts: The model-selected primary issue is not eligible for the validated facts"
+    },
+    {
+      "case_id": "EC_046",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['multi_item_order']; Value is inconsistent with the selected primary issue: 0.0; Value is inconsistent with the selected primary issue: ['refund_freight']"
+    },
+    {
+      "case_id": "EC_047",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "policy failed after 3 attempts: Value is inconsistent with the selected primary issue: []"
+    },
+    {
+      "case_id": "EC_048",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: 0.0; Value is inconsistent with the selected primary issue: ['refund_freight']"
+    },
+    {
+      "case_id": "EC_049",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['explain_valid_split_payment']"
+    },
+    {
+      "case_id": "EC_050",
+      "status": "failed",
+      "phase": "failed",
+      "output_path": null,
+      "error": "evaluator failed after 3 attempts: Value is inconsistent with the selected primary issue: ['reject_late_refund']"
+    }
+  ]
+}

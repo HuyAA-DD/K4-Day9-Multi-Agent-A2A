@@ -1,125 +1,150 @@
-"""Common interface for model-driven agents with strict structured outputs."""
+"""Shared runtime for model-driven policy roles."""
 
+import asyncio
 import json
-from abc import ABC, abstractmethod
-from collections.abc import Callable
-from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
-from typing import Any, TypeVar
+from time import perf_counter
+from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
-from ecommerce_dispute.config import MODEL_NAME, PROJECT_ROOT
-from ecommerce_dispute.llm import LocalModelClient
+from ecommerce_dispute.llm import StructuredModelClient
+from ecommerce_dispute.schemas import DecisionMetadata, PolicyOutcome, ValidatedPolicyFacts
 from ecommerce_dispute.tracing import TraceWriter
-
-StructuredResult = TypeVar("StructuredResult", bound=BaseModel)
+from ecommerce_dispute.validation import outcome_grounding_issues, policy_invariant_issues
 
 
 class AgentDecisionError(RuntimeError):
-    """Raised when an agent cannot produce an accepted structured decision."""
+    """Raised after a model-backed role exhausts its bounded correction budget."""
 
 
-@dataclass(frozen=True, slots=True)
-class AgentSpec:
-    name: str
-    prompt_file: Path
-    allowed_tools: tuple[str, ...]
-    model_name: str = MODEL_NAME
-
-
-class BaseAgent(ABC):
-    """Base contract implemented by every model-backed agent."""
-
-    spec: AgentSpec
+class ModelPolicyRole:
+    role: str
+    prompt_filename: str
+    prompt_version: str
 
     def __init__(
         self,
-        model_client: LocalModelClient,
+        model_client: StructuredModelClient,
         trace_writer: TraceWriter,
-        run_id: str,
+        model_name: str,
+        prompt_dir: Path,
     ) -> None:
         self.model_client = model_client
         self.trace_writer = trace_writer
-        self.run_id = run_id
-
-    @classmethod
-    def prompt_path(cls, filename: str) -> Path:
-        return PROJECT_ROOT / "prompts" / filename
-
-    async def decide(
-        self,
-        case_id: str,
-        payload: dict[str, Any],
-        response_type: type[StructuredResult],
-        *,
-        accept: Callable[[StructuredResult], bool] | None = None,
-        rejection_message: str = "Decision was not accepted",
-        max_new_tokens: int | None = None,
-    ) -> StructuredResult:
-        """Require a schema-valid model decision; invalid decisions are retried then fail."""
-        schema = response_type.model_json_schema()
-        system_prompt = self.spec.prompt_file.read_text(encoding="utf-8") + (
-            "\n\nReturn one JSON object only. No markdown and no explanation outside JSON. "
-            "The runtime constrains decoding to the required JSON Schema."
+        self.model_name = model_name
+        self.prompt_path = prompt_dir / self.prompt_filename
+        self.system_prompt = self.prompt_path.read_text(encoding="utf-8") + (
+            "\n\nReturn exactly one JSON object matching the supplied JSON Schema. "
+            "Do not return markdown or prose outside JSON."
         )
-        feedback: str | None = None
+        self.prompt_hash = sha256(self.system_prompt.encode("utf-8")).hexdigest()
+        self.resolved_model_ids: set[str] = set()
+
+    async def complete_outcome(
+        self,
+        *,
+        run_id: str,
+        case_id: str,
+        facts: ValidatedPolicyFacts,
+        source_fact_hash: str,
+        task: str,
+        additional_payload: dict[str, Any] | None = None,
+        disputed_fields: tuple[str, ...] = (),
+    ) -> tuple[PolicyOutcome, DecisionMetadata]:
+        payload: dict[str, Any] = {
+            "task": task,
+            "policy_version": facts.policy_version,
+            "facts": facts.model_dump(mode="json"),
+        }
+        if additional_payload:
+            payload.update(additional_payload)
+        if disputed_fields:
+            payload["self_correction"] = {
+                "fields_to_recheck": list(disputed_fields),
+                "instruction": "Re-evaluate from facts; no other agent answer is provided.",
+            }
+
+        correction: str | None = None
         last_error = "unknown model decision error"
-        for attempt in range(1, self.model_client.settings.max_agent_attempts + 1):
+        settings = self.model_client.settings
+        for attempt in range(1, settings.max_agent_attempts + 1):
             request = dict(payload)
-            raw: dict[str, Any] | None = None
-            if feedback:
-                request["correction"] = feedback
+            if correction:
+                request["correction"] = correction
+            started = perf_counter()
             try:
-                raw = await self.model_client.complete_json(
-                    system_prompt,
+                completion = await self.model_client.complete_json(
+                    self.system_prompt,
                     json.dumps(request, ensure_ascii=False, separators=(",", ":")),
-                    max_new_tokens=max_new_tokens,
-                    response_schema=schema,
+                    model=self.model_name,
+                    response_schema=PolicyOutcome.model_json_schema(),
+                    max_output_tokens=settings.max_output_tokens,
                 )
-                decision = response_type.model_validate(raw)
-                if accept is not None and not accept(decision):
-                    raise AgentDecisionError(rejection_message)
-                self.trace(
-                    "model_decision",
-                    case_id,
-                    attempt=attempt,
-                    response_type=response_type.__name__,
-                    model_output=decision.model_dump(mode="json"),
+                outcome = PolicyOutcome.model_validate(completion.content)
+                grounding = outcome_grounding_issues(outcome, facts)
+                invariants = policy_invariant_issues(outcome, facts)
+                if grounding or invariants:
+                    errors = grounding + [message for _, message in invariants]
+                    raise AgentDecisionError("; ".join(errors))
+                latency_ms = round((perf_counter() - started) * 1000, 2)
+                self.resolved_model_ids.add(completion.model_id)
+                self.trace_writer.write(
+                    {
+                        "run_id": run_id,
+                        "case_id": case_id,
+                        "agent": self.role,
+                        "event": "model_decision",
+                        "attempt": attempt,
+                        "model": completion.model_id,
+                        "provider_request_id": completion.request_id,
+                        "prompt_version": self.prompt_version,
+                        "prompt_hash": self.prompt_hash,
+                        "source_fact_hash": source_fact_hash,
+                        "latency_ms": latency_ms,
+                        "usage": completion.usage,
+                        "decision_summary": {
+                            "primary_issue": outcome.primary_issue,
+                            "secondary_issue_count": len(outcome.secondary_issues),
+                            "responsible_party_count": len(outcome.responsible_parties),
+                            "recommended_refund_brl": outcome.recommended_refund_brl,
+                        },
+                    }
                 )
-                return decision
+                metadata = DecisionMetadata(
+                    policy_version=facts.policy_version,
+                    prompt_version=self.prompt_version,
+                    prompt_hash=self.prompt_hash,
+                    source_fact_hash=source_fact_hash,
+                    model_id=completion.model_id,
+                    provider_request_id=completion.request_id,
+                    agent_role=self.role,  # type: ignore[arg-type]
+                )
+                return outcome, metadata
             except (AgentDecisionError, ValidationError, ValueError) as exc:
                 last_error = str(exc)
-            except Exception as exc:  # noqa: BLE001  # bounded model backend boundary
+            except Exception as exc:  # noqa: BLE001  # bounded external model boundary
                 last_error = f"{type(exc).__name__}: {exc}"
-            self.trace(
-                "model_decision_retry",
-                case_id,
-                attempt=attempt,
-                response_type=response_type.__name__,
-                error=last_error[:500],
-                model_output=raw,
+            self.trace_writer.write(
+                {
+                    "run_id": run_id,
+                    "case_id": case_id,
+                    "agent": self.role,
+                    "event": "model_decision_retry",
+                    "attempt": attempt,
+                    "model": self.model_name,
+                    "prompt_version": self.prompt_version,
+                    "source_fact_hash": source_fact_hash,
+                    "error": last_error[:500],
+                }
             )
-            feedback = (
-                f"Your previous response was invalid: {last_error}. "
-                "Return a corrected JSON object matching the schema exactly."
+            correction = (
+                f"Your previous response failed validation: {last_error}. "
+                "Re-evaluate only from the supplied facts and return a corrected object."
             )
+            if attempt < settings.max_agent_attempts and settings.retry_backoff_seconds > 0:
+                await asyncio.sleep(settings.retry_backoff_seconds * (2 ** (attempt - 1)))
         raise AgentDecisionError(
-            f"{self.spec.name} failed to produce {response_type.__name__}: {last_error}"
+            f"{self.role} failed after {settings.max_agent_attempts} attempts: {last_error}"
         )
-
-    def trace(self, event: str, case_id: str, **details: Any) -> None:
-        self.trace_writer.write(
-            {
-                "run_id": self.run_id,
-                "case_id": case_id,
-                "agent": self.spec.name,
-                "model": self.spec.model_name,
-                "event": event,
-                **details,
-            }
-        )
-
-    @abstractmethod
-    async def run(self, state: Any) -> Any:
-        """Process validated state and return a typed handoff payload."""

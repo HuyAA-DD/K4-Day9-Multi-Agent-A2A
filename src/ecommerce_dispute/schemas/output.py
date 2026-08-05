@@ -1,41 +1,45 @@
-"""Strict final output contract matching the assignment README."""
+"""Strict final output contract required by the assignment."""
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
-from ecommerce_dispute.schemas.handoffs import ResponsibleParty, SellerHandoffFact
+from .common import StrictModel
+from .decisions import (
+    PrimaryIssue,
+    ResolutionAction,
+    ResponsibleParty,
+    RootCauseCode,
+    SecondaryIssue,
+)
+from .facts import SellerHandoffFact
 
 
-class StrictOutputModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-
-class CaseAssessment(StrictOutputModel):
-    primary_issue: str
-    secondary_issues: list[str] = Field(max_length=5)
+class CaseAssessment(StrictModel):
+    primary_issue: PrimaryIssue
+    secondary_issues: list[SecondaryIssue] = Field(max_length=5)
     case_status: Literal["action_required", "no_action"]
     confidence: float = Field(ge=0.0, le=1.0)
 
 
-class AffectedEntities(StrictOutputModel):
+class AffectedEntities(StrictModel):
     order_ids: list[str] = Field(max_length=5)
     item_ids: list[str] = Field(max_length=5)
     seller_ids: list[str] = Field(max_length=3)
     payment_ids: list[str] = Field(max_length=5)
 
 
-class CustomerContext(StrictOutputModel):
+class CustomerContext(StrictModel):
     customer_unique_id: str | None
     related_order_ids: list[str] = Field(max_length=5)
 
 
-class ProductContext(StrictOutputModel):
+class ProductContext(StrictModel):
     product_ids: list[str] = Field(max_length=5)
     category_names: list[str] = Field(max_length=5)
 
 
-class DeliveryAnalysis(StrictOutputModel):
+class DeliveryAnalysis(StrictModel):
     delivered_at: str | None
     estimated_delivery_at: str | None
     carrier_handoff_at: str | None
@@ -44,7 +48,7 @@ class DeliveryAnalysis(StrictOutputModel):
     late_handoff_seller_ids: list[str] = Field(max_length=3)
 
 
-class PaymentReconciliation(StrictOutputModel):
+class PaymentReconciliation(StrictModel):
     currency: Literal["BRL"] = "BRL"
     item_total_brl: float | None
     freight_total_brl: float | None
@@ -55,22 +59,22 @@ class PaymentReconciliation(StrictOutputModel):
     payment_types: list[str]
 
 
-class RankedCause(StrictOutputModel):
-    cause_code: str
+class RankedCause(StrictModel):
+    cause_code: RootCauseCode
     rank: int = Field(ge=1, le=3)
 
 
-class RootCauseAnalysis(StrictOutputModel):
+class RootCauseAnalysis(StrictModel):
     ranked_causes: list[RankedCause] = Field(max_length=3)
     responsible_parties: list[ResponsibleParty] = Field(max_length=3)
 
 
-class FinancialResolution(StrictOutputModel):
+class FinancialResolution(StrictModel):
     currency: Literal["BRL"] = "BRL"
     recommended_refund_brl: float = Field(ge=0.0)
 
 
-class CaseOutput(StrictOutputModel):
+class CaseOutput(StrictModel):
     case_id: str
     case_assessment: CaseAssessment
     affected_entities: AffectedEntities
@@ -81,4 +85,4 @@ class CaseOutput(StrictOutputModel):
     root_cause_analysis: RootCauseAnalysis
     evidence_ids: list[str] = Field(max_length=20)
     financial_resolution: FinancialResolution
-    resolution_actions: list[str] = Field(max_length=5)
+    resolution_actions: list[ResolutionAction] = Field(max_length=5)

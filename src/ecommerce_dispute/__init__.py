@@ -1,6 +1,5 @@
-"""Multi-agent Olist dispute resolution package."""
+"""Deterministic Olist dispute workflow with model-driven policy roles."""
 
-from .config import MODEL_NAME
+from .config import POLICY_VERSION
 
-__all__ = ["MODEL_NAME"]
-
+__all__ = ["POLICY_VERSION"]

@@ -1,51 +1,67 @@
-"""Mutable state owned exclusively by the Supervisor Agent."""
+"""Single-writer case state for the deterministic workflow."""
 
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from ecommerce_dispute.schemas.case import CaseInput
-from ecommerce_dispute.schemas.handoffs import (
+from ecommerce_dispute.schemas import (
+    CaseInput,
+    CaseOutput,
     CustomerFacts,
     DeliveryFacts,
+    ExpectedPolicyDecision,
+    FactHandoff,
+    MechanicalReport,
     OrderProductFacts,
     PaymentFacts,
     PolicyDecision,
+    ValidatedPolicyFacts,
     VerificationReport,
 )
-from ecommerce_dispute.schemas.output import CaseOutput
 
 
 class CasePhase(StrEnum):
     RECEIVED = "received"
     INVESTIGATING = "investigating"
-    POLICY_READY = "policy_ready"
-    DECIDED = "decided"
-    VERIFYING = "verifying"
+    FACTS_READY = "facts_ready"
+    DECIDING = "deciding"
+    MECHANICALLY_VALIDATED = "mechanically_validated"
+    COMPARING = "comparing"
     VERIFIED = "verified"
-    WRITTEN = "written"
+    NEEDS_REVIEW = "needs_review"
     FAILED = "failed"
+    WRITTEN = "written"
+
+
+TERMINAL_PHASES = {CasePhase.NEEDS_REVIEW, CasePhase.FAILED, CasePhase.WRITTEN}
 
 
 @dataclass(slots=True)
 class CaseState:
+    run_id: str
     case_input: CaseInput
     phase: CasePhase = CasePhase.RECEIVED
-    customer_facts: CustomerFacts | None = None
-    order_product_facts: OrderProductFacts | None = None
-    payment_facts: PaymentFacts | None = None
-    delivery_facts: DeliveryFacts | None = None
+    customer_handoff: FactHandoff[CustomerFacts] | None = None
+    order_handoff: FactHandoff[OrderProductFacts] | None = None
+    payment_handoff: FactHandoff[PaymentFacts] | None = None
+    delivery_handoff: FactHandoff[DeliveryFacts] | None = None
+    policy_facts: ValidatedPolicyFacts | None = None
+    source_fact_hash: str | None = None
     policy_decision: PolicyDecision | None = None
+    expected_decision: ExpectedPolicyDecision | None = None
     draft_output: CaseOutput | None = None
-    verification: VerificationReport | None = None
+    mechanical_report: MechanicalReport | None = None
+    verification_report: VerificationReport | None = None
     attempts: dict[str, int] = field(default_factory=dict)
+    transition_history: list[str] = field(default_factory=lambda: [CasePhase.RECEIVED.value])
+    error: str | None = None
 
-    def all_investigation_facts_ready(self) -> bool:
+    def facts_ready(self) -> bool:
         return all(
-            value is not None
-            for value in (
-                self.customer_facts,
-                self.order_product_facts,
-                self.payment_facts,
-                self.delivery_facts,
+            handoff is not None
+            for handoff in (
+                self.customer_handoff,
+                self.order_handoff,
+                self.payment_handoff,
+                self.delivery_handoff,
             )
         )

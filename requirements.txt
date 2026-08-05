@@ -1,7 +1,5 @@
 # Runtime (Python 3.11+)
---extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
-huggingface-hub>=0.34,<1
-llama-cpp-python>=0.3.34,<1
+openai>=1.0,<3
 pandas>=2.0,<3
 pydantic>=2.0,<3
 python-dotenv>=1.0,<2
