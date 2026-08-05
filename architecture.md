@@ -20,7 +20,7 @@ Các bước đọc/join dữ liệu, tính tiền, tính chênh lệch thời g
 Sau đó, `Deterministic Comparator` so sánh hai structured decisions theo từng semantic field.
 Comparator là thành phần duy nhất được nhìn cả hai quyết định. Việc hai agent đồng ý là một
 cross-check, không được coi là bằng chứng duy nhất về tính đúng; output còn phải qua schema,
-source-grounding, arithmetic và cross-field business invariants.
+source-grounding, arithmetic và các kiểm tra consistency tổng quát không suy ra đáp án policy.
 
 Trong production, Policy Agent và Independent Evaluator nên dùng prompt riêng và model snapshot
 khác nhau để giảm correlated failure. Nếu bài lab buộc dùng chung `gpt-4o-mini`, hai agent vẫn phải
@@ -61,7 +61,7 @@ flowchart TD
     DF --> OB
     OB --> DRAFT[(Draft CaseOutput)]
 
-    DRAFT --> MV["Mechanical + business invariant gates"]
+    DRAFT --> MV["Mechanical + grounding/consistency gates"]
     MV -->|pass| CMP["Deterministic Comparator"]
     PD --> CMP
     ED --> CMP
@@ -101,7 +101,7 @@ flowchart TD
 7. Output Builder chiếu facts và `PolicyDecision` sang `CaseOutput`; component này không đưa ra
    quyết định nghiệp vụ.
 8. Mechanical gates kiểm tra schema, arithmetic, ID/số tiền nguồn, giới hạn mảng, phép chiếu và
-   cross-field business invariants.
+   các mâu thuẫn tổng quát; gates không tính đáp án `EC_POLICY_V2` kỳ vọng.
 9. Khi mechanical gates pass, Comparator so sánh `PolicyDecision` và `ExpectedPolicyDecision`
    theo từng semantic field và tạo `VerificationReport`.
 10. Nếu khác nhau lần đầu, hai agent được re-evaluate độc lập. Feedback chỉ mô tả field bất đồng,
@@ -142,7 +142,7 @@ Code chịu trách nhiệm cho các thao tác có một đáp án khách quan:
 - dựng, validate và giới hạn typed handoff;
 - kiểm tra ID/số tiền model trả có tồn tại trong facts;
 - projection từ facts/decision sang output;
-- kiểm tra cross-field invariants;
+- kiểm tra consistency tổng quát mà không lựa chọn outcome;
 - so sánh hai structured decisions;
 - quản lý phase, retry, timeout, idempotency và atomic write.
 
@@ -154,32 +154,32 @@ Model chịu trách nhiệm cho các quyết định semantic được yêu cầ
 - refund và resolution actions;
 - đánh giá policy độc lập và adjudication khi cần.
 
-Nếu `EC_POLICY_V2` là một bảng luật cố định và dự án không bắt buộc model-driven policy, lựa chọn
-an toàn hơn cho production là triển khai policy bằng code và chỉ dùng LLM để giải thích kết quả.
-Nếu bài toán bắt buộc LLM đưa ra policy, các deterministic invariants bên dưới vẫn phải được giữ.
+Production path của dự án này bắt buộc model-driven: code không được chứa bảng ánh xạ primary,
+không kiểm tra primary nào phải thắng, và không tự dựng secondary issues, root cause, parties,
+refund hoặc actions kỳ vọng. Policy prompt là nơi mô tả `EC_POLICY_V2`; Evaluator và Adjudicator
+tự áp dụng policy bằng model.
 
-## 6. Hợp đồng dữ liệu và business invariants
+## 6. Hợp đồng dữ liệu và non-semantic safety gates
 
 Mỗi handoff dùng Pydantic model với `extra="forbid"`. Enum policy, array limit, tiền không âm,
 confidence `[0,1]` và các field bắt buộc được khóa bằng strict JSON Schema. Mọi schema đều có
 `schema_version`; mọi quyết định đều mang `policy_version`, `prompt_version` và source-fact hash.
 
-Ngoài field-level validation, Mechanical Validator phải kiểm tra tối thiểu:
+Ngoài field-level validation, Mechanical Validator chỉ kiểm tra các thuộc tính không cần suy ra
+đáp án nghiệp vụ:
 
-- `no_action` đi cùng refund bằng `0` và không có action hoàn tiền;
-- `action_required` có ít nhất một resolution action phù hợp;
+- tiền có tối đa hai chữ số thập phân;
+- `no_action` không đi cùng refund dương và `action_required` không đi cùng refund bằng `0`;
+- refund bằng `0` không đi cùng `verify_refund_completion`;
 - seller chịu trách nhiệm phải tồn tại trong `OrderProductFacts`;
-- refund chỉ được lấy từ các source amount cho phép và khớp loại resolution;
-- primary issue, case status, root cause, responsible parties và action không mâu thuẫn nhau;
-- late-delivery outcome phù hợp với delivery variance và seller handoff facts;
-- canceled/unavailable paid outcome có payment dương;
-- split-payment outcome có nhiều payment row và đã reconciled;
+- refund phải là một source amount được phép;
 - mọi evidence ID tồn tại trong source references;
 - các collection không trùng và không vượt giới hạn schema;
 - related orders chỉ nằm trong `customer_context`, không xuất hiện trong `affected_entities`.
 
-Model output sai schema hoặc grounding được retry hữu hạn. Vi phạm invariant xác định không được
-“sửa bằng đồng thuận LLM”; case phải quay về đúng owner component hoặc fail rõ nguyên nhân.
+Validator tuyệt đối không chứa điều kiện eligibility theo từng primary, bảng root/action/refund,
+thứ tự ưu tiên policy hoặc expected outcome. Model output sai schema, grounding hoặc consistency
+tổng quát được retry hữu hạn; bất đồng semantic chỉ được giải quyết bởi model độc lập/Adjudicator.
 
 ## 7. State, retry và failure handling
 
@@ -290,7 +290,7 @@ src/ecommerce_dispute/
 │   ├── output_builder.py
 │   └── output_writer.py
 ├── schemas/                       # versioned input, facts, decisions, reports
-├── validation/                    # schema, grounding and business invariants
+├── validation/                    # schema, grounding and generic consistency
 ├── tools/                         # scoped facades, calculators, evidence
 ├── tracing/                       # per-run trace, metadata and manifest
 ├── config.py
@@ -336,7 +336,7 @@ Kiến trúc chỉ được coi là sẵn sàng khi:
 2. domain facts có thể tái lập hoàn toàn từ cùng input/source;
 3. Independent Evaluator không nhận draft hoặc đáp án của Policy Agent;
 4. Comparator là deterministic và có test theo từng semantic field;
-5. cross-field invariants có unit test và golden cases;
+5. safety gates có test và không chứa policy outcome oracle;
 6. disagreement kéo dài không tự động ghi output;
 7. mỗi run phân biệt được output mới, output cũ và case thất bại;
 8. concurrency, retry, timeout và rate limit đều có giới hạn;

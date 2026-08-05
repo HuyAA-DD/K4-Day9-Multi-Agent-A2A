@@ -1,0 +1,17 @@
+{
+  "run_id": "run-openai-nonrule-20260805-003-ec005",
+  "status": "success",
+  "cases_total": 1,
+  "cases_succeeded": 1,
+  "cases_failed": 0,
+  "cases_needing_review": 0,
+  "cases": [
+    {
+      "case_id": "EC_005",
+      "status": "success",
+      "phase": "written",
+      "output_path": "D:\\AIIA\\K4-Day9-Multi-Agent-A2A\\output\\run-openai-nonrule-20260805-003-ec005\\EC_005.json",
+      "error": null
+    }
+  ]
+}

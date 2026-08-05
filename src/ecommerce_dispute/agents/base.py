@@ -18,9 +18,8 @@ from ecommerce_dispute.schemas import (
 )
 from ecommerce_dispute.tracing import TraceWriter
 from ecommerce_dispute.validation import (
+    outcome_consistency_issues,
     outcome_grounding_issues,
-    policy_invariant_issues,
-    primary_selection_issue,
 )
 
 
@@ -81,9 +80,6 @@ class ModelPolicyRole:
                     max_output_tokens=96,
                 )
                 selection = PrimarySelection.model_validate(completion.content)
-                issue = primary_selection_issue(selection.primary_issue, facts)
-                if issue:
-                    raise AgentDecisionError(issue)
                 self.resolved_model_ids.add(completion.model_id)
                 self.trace_writer.write(
                     {
@@ -184,9 +180,9 @@ class ModelPolicyRole:
                         f"{primary.primary_issue!r}"
                     )
                 grounding = outcome_grounding_issues(outcome, facts)
-                invariants = policy_invariant_issues(outcome, facts)
-                if grounding or invariants:
-                    errors = grounding + [message for _, message in invariants]
+                consistency = outcome_consistency_issues(outcome)
+                if grounding or consistency:
+                    errors = grounding + [message for _, message in consistency]
                     raise AgentDecisionError("; ".join(errors))
                 latency_ms = round((perf_counter() - started) * 1000, 2)
                 self.resolved_model_ids.add(completion.model_id)

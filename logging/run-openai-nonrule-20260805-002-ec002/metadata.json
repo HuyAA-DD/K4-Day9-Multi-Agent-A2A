@@ -1,0 +1,36 @@
+{
+  "run_id": "run-openai-nonrule-20260805-002-ec002",
+  "model_provider": "OpenAI API",
+  "parameter_count": "not_disclosed",
+  "configured_models": {
+    "policy": "gpt-4o-mini",
+    "evaluator": "gpt-4o-mini",
+    "adjudicator": "gpt-4o"
+  },
+  "resolved_models": {
+    "policy": [
+      "gpt-4o-mini-2024-07-18"
+    ],
+    "evaluator": [
+      "gpt-4o-mini-2024-07-18"
+    ],
+    "adjudicator": []
+  },
+  "framework": "deterministic-dag-with-model-policy-roles",
+  "runtime": {
+    "device": "openai-hosted-api",
+    "python": "3.11.9",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "started_at": "2026-08-05T16:47:34.414382+00:00",
+    "completed_at": "2026-08-05T16:47:40.766742+00:00",
+    "duration_seconds": 6.352,
+    "max_case_concurrency": 4
+  },
+  "counts": {
+    "total": 1,
+    "succeeded": 1,
+    "failed": 0,
+    "needs_review": 0
+  },
+  "status": "success"
+}

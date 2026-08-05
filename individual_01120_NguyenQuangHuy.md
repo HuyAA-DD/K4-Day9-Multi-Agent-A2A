@@ -7,166 +7,150 @@
 | Họ và tên | Nguyễn Quang Huy |
 | MSSV (5 số cuối) | 01120 |
 | Khóa/Lớp | K4 |
-| Vai trò chính | Thiết kế và triển khai Supervisor DAG; tích hợp, thử nghiệm model và hoàn thiện pipeline sinh output |
-| Ngày hoàn thành báo cáo | 05/08/2026 |
+| Vai trò chính | Thiết kế kiến trúc agent, xây dựng deterministic workflow, tích hợp model và hoàn thiện pipeline sinh output |
+| Ngày cập nhật báo cáo | 05/08/2026 |
 
 ## 2. Tổng quan phần việc đã thực hiện
 
-Trong bài lab này, tôi phụ trách phần lớn quá trình xây dựng pipeline giải quyết khiếu nại thương mại điện tử từ đầu vào đến output. Công việc không chỉ dừng ở việc tạo nhiều lớp mang tên “agent”, mà bao gồm cả luồng điều phối, hợp đồng dữ liệu giữa các thành phần, truy xuất dữ liệu Olist, tính toán, gọi model, kiểm tra kết quả và lưu trace phục vụ audit.
+Trong bài lab này, tôi phụ trách phần lớn pipeline giải quyết khiếu nại thương mại điện tử từ đầu vào đến output. Công việc bao gồm thiết kế luồng điều phối, hợp đồng dữ liệu giữa các thành phần, truy xuất dữ liệu Olist, tính toán facts, gọi model, kiểm tra kết quả và lưu trace phục vụ audit.
 
-Các mốc công việc chính có thể đối chiếu trong lịch sử Git:
+Các mốc chính có thể đối chiếu trong lịch sử Git:
 
 | Mốc | Nội dung |
 | --- | --- |
-| `2e95dba` — `upload input` | Đưa đủ 50 case `EC_001` đến `EC_050` vào thư mục `input/`. |
-| `5c11aa3` — `supervisor dag` | Xây dựng cấu trúc Supervisor DAG ban đầu, các agent chuyên môn, schema, data repository, policy, validator, prompt và tài liệu kiến trúc. |
-| `c1f1b82` — `update requirements.txt` | Bổ sung các dependency cần cho runtime và kiểm thử. |
-| `ba56d9e` — `change model` | Chuyển hướng model, hoàn thiện runtime chạy model, sinh output, trace, metadata, runbook và các bài test tích hợp. |
-| Worktree hiện tại | Refactor kiến trúc để giảm phụ thuộc rule-based: tách worker xác định khỏi agent suy luận, bổ sung Independent Evaluator, Comparator, Adjudicator tùy chọn, validation và namespace theo từng run. |
+| `2e95dba` — `upload input` | Đưa đủ 50 case `EC_001` đến `EC_050` vào `input/`. |
+| `5c11aa3` — `supervisor dag` | Xây dựng phiên bản Supervisor DAG ban đầu, schema, data repository, policy, validator, prompt và tài liệu kiến trúc. |
+| `c1f1b82` — `update requirements.txt` | Bổ sung dependency cho runtime và kiểm thử. |
+| `ba56d9e` — `change model` | Hoàn thiện runtime gọi model, output, trace, metadata, runbook và test tích hợp. |
+| Worktree hiện tại | Loại bỏ production policy oracle, tách worker xác định khỏi agent suy luận, bổ sung Independent Evaluator, Comparator, Adjudicator tùy chọn và namespace theo từng run. |
 
-### Các hạng mục cụ thể
+Các hạng mục cụ thể:
 
-- Thiết kế luồng Supervisor/DAG và state của một case từ lúc nhận input, điều tra dữ liệu, áp policy, kiểm tra đến khi ghi output.
-- Xây dựng các vai trò Customer, Order & Product, Payment, Delivery, Policy và Verifier trong phiên bản đầu.
-- Xây dựng repository đọc dữ liệu Olist, các tool truy cập có giới hạn, phép tính tiền, giao hàng và seller handoff.
+- Xây dựng deterministic workflow để quản lý state, thứ tự chạy, retry, review và ghi output.
+- Xây dựng các facts worker cho Customer, Order & Product, Payment và Delivery.
+- Xây dựng repository đọc dữ liệu Olist và các phép tính tiền, thời gian giao hàng, seller handoff.
 - Tạo Pydantic schema cho input, handoff, facts, policy decision, verification report và output cuối.
-- Viết prompt riêng cho các vai trò có sử dụng model và ràng buộc structured JSON output.
-- Thêm retry, trace JSONL, metadata model/runtime, output writer và hướng dẫn chạy trong `RUNBOOK.md`.
-- Chạy thử nhiều hướng model, phân tích lỗi giữa Policy Agent và Verifier, sau đó thay đổi lại kiến trúc.
-- Bổ sung unit, contract, failure, integration và golden test cho toàn bộ 50 case.
+- Viết prompt riêng cho các vai trò dùng model, yêu cầu structured output đúng JSON Schema.
+- Xây dựng Policy Agent, Independent Policy Evaluator và Adjudicator độc lập.
+- Thêm trace JSONL, metadata model/runtime, manifest theo case và output writer.
+- Bổ sung unit, contract, failure, integration và golden test cho 50 case.
 
-## 3. Luồng kỹ thuật tôi đã triển khai
+## 3. Kiến trúc và luồng kỹ thuật hiện tại
 
 Pipeline hiện tại hoạt động theo luồng sau:
 
 1. Đọc và validate `input/EC_XXX.json`.
 2. Customer Facts Worker và Order & Product Facts Worker truy xuất dữ liệu song song.
-3. Sau khi có thông tin đơn hàng, Payment Reconciliation Worker và Delivery Analysis Worker tiếp tục chạy song song.
-4. Các handoff được validate và rút gọn thành `ValidatedPolicyFacts`.
-5. Policy Agent và Independent Policy Evaluator nhận cùng facts nhưng dùng prompt/request độc lập để sinh hai quyết định có cấu trúc.
-6. Code dựng output từ facts và quyết định của Policy Agent, sau đó kiểm tra schema, source grounding, số tiền, ID và các invariant liên trường.
-7. Comparator so sánh hai quyết định. Nếu bất đồng, hai agent được chạy lại trong giới hạn retry; nếu vẫn không thống nhất thì case chuyển sang `needs_review` hoặc Adjudicator nếu được cấu hình.
-8. Chỉ case vượt qua toàn bộ gate mới được ghi vào `output/<run_id>/`; trạng thái từng case được lưu trong manifest và trace.
+3. Payment Reconciliation Worker và Delivery Analysis Worker tiếp tục chạy song song sau khi có thông tin đơn hàng.
+4. Các handoff được validate và hợp nhất thành `ValidatedPolicyFacts`.
+5. Policy Agent và Independent Policy Evaluator nhận cùng facts nhưng dùng request độc lập để sinh hai quyết định có cấu trúc.
+6. Code dựng output từ facts và quyết định của model, sau đó chỉ kiểm tra schema, source grounding, định dạng tiền, ID và tính nhất quán liên trường ở mức tổng quát.
+7. Comparator so sánh hai quyết định. Nếu bất đồng, hai agent được retry; nếu vẫn không thống nhất thì case chuyển sang `needs_review` hoặc được Adjudicator xử lý khi có cấu hình.
+8. Chỉ output vượt qua toàn bộ gate mới được ghi vào `output/<run_id>/`; trạng thái từng case được lưu trong manifest và trace.
 
-Tôi chủ động tách hai loại công việc:
+Ranh giới trách nhiệm được xác định rõ:
 
-- Phần xác định bằng code: đọc/join dữ liệu, cộng tiền, tính thời gian, kiểm tra schema, ID và nguồn dữ liệu, quản lý state, retry và ghi file.
-- Phần cần suy luận bằng model: chọn primary/secondary issue, root cause, bên chịu trách nhiệm, refund và resolution action theo `EC_POLICY_V2`.
+- Deterministic code chỉ làm công việc cơ học: đọc/join dữ liệu, tính toán facts, validate schema và grounding, quản lý state, retry, trace và ghi file.
+- Model chịu trách nhiệm cho quyết định semantic: chọn primary/secondary issue, root cause, bên chịu trách nhiệm, trạng thái xử lý, refund và resolution action theo `EC_POLICY_V2`.
+- Production code không còn decision table hoặc hàm ánh xạ primary issue sang một đáp án policy cố định.
 
 ## 4. Quá trình lựa chọn và thử model
 
-Việc chọn model là khó khăn lớn nhất của bài vì model vừa phải tuân thủ giới hạn tối đa 10B tham số, vừa phải đủ tốt để hiểu policy, giữ đúng thứ tự ưu tiên và trả JSON đúng schema.
-
-| Model/hướng thử | Mục tiêu và lý do chọn | Kết quả thực tế | Kết luận |
-| --- | --- | --- | --- |
-| `Qwen/Qwen3.5-9B` | Lựa chọn ban đầu vì kích thước khai báo 9B, sát giới hạn 10B và dự kiến chạy qua endpoint tương thích OpenAI. | Model xuất hiện trong cấu hình và kiến trúc của commit `5c11aa3`, nhưng phiên bản này chủ yếu mới là scaffold; repo không có trace chứng minh một lượt chạy hoàn chỉnh bằng model này. | Phù hợp trên lý thuyết nhưng chưa có runtime ổn định để xác minh. |
-| `Qwen/Qwen3-1.7B-GGUF`, file `Qwen3-1.7B-Q8_0.gguf` | Chuyển sang model local nhỏ để chắc chắn dưới 10B, chạy offline bằng llama.cpp và không phụ thuộc API key. | Có trace chạy thật case `EC_001`. Model hoàn thành các handoff nhưng Policy Agent chọn `valid_split_payment`, còn Verifier chọn `unsupported_late_claim`; sau retry case vẫn thất bại, kết quả 0/1. | Chạy được trên máy local nhưng chất lượng suy luận policy và độ ổn định giữa các vai trò chưa đủ. |
-| `gpt-4o-mini` | Dùng structured output ổn định hơn, tốc độ tốt hơn và giảm lỗi JSON/semantic so với model local 1.7B. | Snapshot thực tế trong một run là `gpt-4o-mini-2024-07-18`. Một run đầy đủ hiện tại đạt 1/50; run sau đạt 0/50 do lỗi kết nối OpenAI. Một trace cũ hơn chạy được đến lúc bắt đầu `EC_042` nhưng không có sự kiện `run_completed`. | Chất lượng phản hồi tốt hơn, nhưng kết quả hiện chưa ổn định vì validator/prompt và kết nối. Ngoài ra số tham số chính thức không được công bố, nên chưa có bằng chứng chắc chắn để đối chiếu điều kiện ≤10B của đề. |
-
-### Những khó khăn chính khi chọn model
-
-1. **Giới hạn ≤10B và bằng chứng về số tham số:** model local có thông tin kích thước rõ ràng nhưng chất lượng thấp; model API tốt hơn lại không công bố số tham số chính thức.
-2. **Giới hạn phần cứng:** model local phải chạy CPU/llama.cpp. Model 1.7B đủ nhẹ nhưng suy luận policy chưa ổn định; model gần 9B cần nhiều RAM và thời gian hơn.
-3. **Structured output:** mỗi agent phải trả đúng JSON Schema. Chỉ cần sai enum, thiếu field, thêm text hoặc chọn giá trị không có trong facts là cả case phải retry hoặc fail.
-4. **Tính nhất quán giữa các vai trò:** Policy Agent và Verifier/Evaluator có thể đọc cùng facts nhưng chọn hai policy khác nhau. Model nhỏ đặc biệt dễ không giữ đúng priority của `EC_POLICY_V2`.
-5. **Chi phí và độ trễ:** kiến trúc ban đầu gọi model ở quá nhiều bước. Với 50 case và nhiều agent, số request lớn, runtime dài và dễ gặp rate limit hoặc lỗi kết nối.
-6. **Ranh giới giữa validation và rule-based:** code cần kiểm tra tính đúng của output nhưng không được thay model quyết định policy. Nếu validator chứa cả bảng đáp án và tự chọn kết quả, hệ thống vẫn bị xem là rule-based dù bên ngoài có nhiều agent.
-
-## 5. Lần nộp duy nhất có điểm và lỗi rule-based
-
-Lần nộp duy nhất mà hệ thống chấm trả về điểm là bộ 50 output được sinh trong giai đoạn kiến trúc đầu, với kết quả **67.2893 điểm**. Tuy nhiên, lần này bị đánh dấu **rule-based**, vì vậy số điểm trên chưa phản ánh đầy đủ yêu cầu trọng tâm của bài về multi-agent dùng model để đưa ra quyết định.
-
-Nguyên nhân gốc có thể xác minh trực tiếp trong commit `5c11aa3`:
-
-- Tồn tại `src/ecommerce_dispute/policies/ec_policy_v2.py`, triển khai decision table bằng code.
-- `Policy Agent` gọi tool `evaluate_ec_policy_v2` thay vì tự suy luận và tạo quyết định policy.
-- `architecture.md` tại thời điểm đó mô tả rõ `Deterministic Policy Engine` và các rule first-match.
-- Model chủ yếu tham gia điều phối/handoff, trong khi quyết định quan trọng nhất đã được code xác định trước.
-
-Vì vậy, dù output có thể đúng và hệ thống có Supervisor cùng nhiều agent, grader vẫn có cơ sở xem đây là một policy engine rule-based được bọc bởi kiến trúc agent.
-
-Sau lỗi này, tôi đã thay đổi hướng triển khai:
-
-- Xóa policy engine production tự chọn đáp án.
-- Để Policy Agent sinh trực tiếp structured decision từ facts và policy prompt.
-- Thêm Independent Evaluator không được nhìn draft của Policy Agent.
-- Dùng Comparator để phát hiện bất đồng thay vì ép model theo một đáp án được code chọn sẵn.
-- Giữ deterministic code cho các thao tác cơ học và validation.
-
-Tuy nhiên, phiên bản hiện tại vẫn còn rủi ro bị đánh giá rule-based vì `validation/policy.py` đang chứa mapping invariant khá chi tiết cho từng primary issue. Dù hàm này chỉ kiểm tra lựa chọn của model và không trực tiếp chọn primary issue, ranh giới này cần tiếp tục được làm gọn và giải thích rõ trước lần nộp tiếp theo.
-
-Đây là lần nộp duy nhất của tôi được leaderboard ghi nhận điểm. Kết quả cụ thể là **67.2893 điểm**, đồng thời submission bị gắn lỗi **rule-based**. Repo hiện không lưu ảnh hoặc JSON phản hồi từ leaderboard, vì vậy con số này được ghi lại theo kết quả tôi trực tiếp nhận được trên hệ thống chấm.
-
-## 6. Kết quả hiện tại
-
-| Hạng mục | Kết quả hiện tại | Bằng chứng |
+| Model/hướng thử | Kết quả thực tế | Kết luận |
 | --- | --- | --- |
-| Lần nộp được chấm điểm | **67.2893 điểm**, bị đánh dấu **rule-based** | Kết quả tôi trực tiếp nhận được trên hệ thống chấm; repo chưa lưu artifact phản hồi từ leaderboard. |
-| Ruff/static checks | Pass | `.venv\Scripts\python.exe -m ruff check src tests` trả về `All checks passed!`. |
-| Test suite offline | 12 test pass | `.venv\Scripts\python.exe -m pytest -q` trả về `12 passed in 4.26s`. |
-| Golden flow 50 case | Pass bằng scripted oracle | `tests/golden/test_all_cases.py` chạy đủ `EC_001` đến `EC_050`, nhưng không gọi model thật. |
-| Run thật `run-full-001` | 1/50 thành công, 49/50 thất bại | `logging/run-full-001/metadata.json` và `manifest.json`; case thành công là `EC_038`. |
-| Run thật `run-openai-20260805-001` | 0/50 thành công | Trace ghi lỗi kết nối OpenAI sau ba lần retry ở các model call. |
-| Bộ output có thể nộp ngay | Chưa đạt | Chưa có một run model thật, cùng một phiên bản code, tạo đủ 50 output đã pass toàn bộ gate. |
+| `Qwen/Qwen3.5-9B` | Có trong cấu hình/kiến trúc ban đầu nhưng repo không có trace chứng minh một lượt chạy hoàn chỉnh. | Phù hợp giới hạn kích thước trên lý thuyết nhưng chưa có runtime ổn định để xác minh. |
+| `Qwen3-1.7B-Q8_0.gguf` | Chạy local được nhưng Policy Agent và Verifier bất đồng ngay ở case thử; chất lượng reasoning chưa đủ ổn định. | Đúng giới hạn dưới 10B nhưng không phù hợp để sinh bộ kết quả cuối. |
+| `gpt-4o-mini-2024-07-18` | Lượt non-rule-based chính xử lý trực tiếp 47/50 case; 3 case bất đồng được tách ra adjudicate và đều hoàn thành. | Structured output và tốc độ tốt, nhưng vẫn bỏ sót một số secondary issue/action. OpenAI không công bố số tham số nên không thể dùng model này làm bằng chứng chắc chắn cho điều kiện ≤10B. |
+| `gpt-4o` cho Adjudicator | Giải quyết thành công ba case `EC_002`, `EC_005`, `EC_007` còn bất đồng. | Hữu ích ở nhánh review, nhưng cũng không có thông tin số tham số công khai. |
 
-Điểm quan trọng là kết quả test offline chỉ chứng minh DAG, schema, validator, retry và output writer hoạt động khi model trả đáp án chuẩn. Nó không chứng minh `gpt-4o-mini` hoặc model local hiện có thể tự giải đúng cả 50 case. Do đó tôi không xem 50 JSON cũ ở thư mục output là bằng chứng cho một run hiện tại thành công.
+Khó khăn chính là cân bằng giữa chất lượng suy luận, structured output, độ trễ, chi phí và yêu cầu model không quá 10B. Model local có kích thước rõ ràng nhưng reasoning yếu hơn; model API ổn định hơn nhưng không có bằng chứng chính thức về số tham số. Ngoài ra, hai agent độc lập có thể đọc cùng facts nhưng đưa ra quyết định khác nhau, nên pipeline cần Comparator, retry và Adjudicator thay vì dùng code ép về một đáp án có sẵn.
 
-Hai nhóm lỗi chính của run thật hiện tại là:
+## 5. Kết quả các lần nộp và vấn đề rule-based
 
-- **Lỗi semantic/validator:** model chọn primary issue không đủ điều kiện hoặc trả các field phụ không đúng mapping rất chặt của validator; run `run-full-001` chỉ ghi được `EC_038`.
-- **Lỗi hạ tầng:** run tiếp theo không gọi được OpenAI API và kết thúc 0/50 do `Connection error`.
+### Lần nộp trước: 67.2893 điểm
 
-## 7. Một quyết định kỹ thuật quan trọng
+Bộ output của kiến trúc cũ đạt **67.2893 điểm** nhưng bị đánh dấu **rule-based**. Nguyên nhân có thể xác minh trong phiên bản cũ:
 
-- **Bối cảnh:** kiến trúc cũ có output đúng hơn nhờ deterministic policy engine nhưng bị lỗi rule-based.
-- **Các phương án cân nhắc:** giữ policy engine để tối đa độ chính xác; dùng hoàn toàn model ở mọi agent; hoặc tách data worker xác định khỏi các agent thực sự cần suy luận.
-- **Phương án chọn:** dùng deterministic worker cho dữ liệu/phép tính/orchestration, còn Policy Agent và Independent Evaluator chịu trách nhiệm quyết định semantic.
-- **Lý do:** cách này giảm số model call, giảm hallucination ở dữ liệu và vẫn giữ phần quyết định nghiệp vụ ở model.
-- **Trade-off:** kết quả live khó ổn định hơn policy engine và cần prompt/validator tốt hơn; đổi lại kiến trúc phản ánh đúng mục tiêu multi-agent hơn và audit được từng quyết định.
+- `src/ecommerce_dispute/policies/ec_policy_v2.py` triển khai decision table bằng code.
+- Policy Agent gọi tool `evaluate_ec_policy_v2` thay vì tự sinh quyết định policy.
+- Kiến trúc cũ mô tả `Deterministic Policy Engine` và các rule first-match.
+- Model chủ yếu tham gia điều phối/handoff, còn quyết định nghiệp vụ quan trọng đã được code xác định trước.
+
+Vì vậy, dù output có độ chính xác cao hơn và hệ thống có nhiều thành phần mang tên agent, grader vẫn có cơ sở coi đây là policy engine rule-based được bọc bởi kiến trúc agent.
+
+### Lần nộp hiện tại: 66.5438 điểm
+
+Bộ output mới đạt **66.5438 điểm**, thấp hơn lần trước **0.7455 điểm**. Bộ này được tạo từ code path hiện tại, sau khi production policy oracle và mapping đáp án theo từng primary issue đã được loại bỏ. Policy Agent, Independent Evaluator và Adjudicator sinh quyết định bằng model; code chỉ điều phối và kiểm tra tính hợp lệ tổng quát.
+
+Phản hồi được cung cấp cho lần này mới chỉ có điểm số **66.5438**; repo chưa lưu artifact từ hệ thống chấm cho biết submission có còn bị gắn cờ rule-based hay không. Vì vậy báo cáo chỉ khẳng định kiến trúc/code path đã chuyển sang non-rule-based, không tự suy diễn trạng thái đánh giá của grader.
+
+Khi so bộ non-rule-based với bộ output trước đó, có 25 case khác nhau, nhưng khác biệt chỉ nằm ở `secondary_issues` hoặc `resolution_actions`; primary issue, status và tổng refund không đổi. Đây là dấu hiệu cho thấy việc loại bỏ mapping cố định đã làm model bỏ sót một số chi tiết như `repeat_customer`, `split_payment`, `coordinate_multi_seller_case` hoặc `verify_payment_allocation`. Tôi đánh giá đây là nguyên nhân có khả năng góp phần làm điểm giảm, nhưng không thể khẳng định là toàn bộ nguyên nhân khi chưa có breakdown chính thức từ grader.
+
+## 6. Kết quả chạy và kiểm thử hiện tại
+
+| Hạng mục | Kết quả | Bằng chứng |
+| --- | --- | --- |
+| Điểm submission mới nhất | **66.5438 điểm** | Kết quả nhận trực tiếp từ hệ thống chấm; repo chưa có response artifact của grader. |
+| Điểm submission trước | **67.2893 điểm**, bị đánh dấu **rule-based** | Kết quả lịch sử do người thực hiện ghi nhận. |
+| Ruff/static checks | Pass | `python -m ruff check src tests` trả về `All checks passed!`. |
+| Test suite offline | **14 test pass** | `python -m pytest -q`. |
+| Run chính `run-openai-nonrule-20260805-001` | **47 success, 0 failed, 3 needs_review** | `logging/run-openai-nonrule-20260805-001/metadata.json` và `manifest.json`. |
+| Ba run adjudication | **3/3 success** | Các run riêng cho `EC_002`, `EC_005`, `EC_007`. |
+| Bộ output tổng hợp cuối | **50/50 file đúng Pydantic schema** | `output/run-openai-nonrule-20260805-final/`. |
+| File nộp | `output-run-openai-nonrule-20260805-final.zip` | SHA-256: `287725D4E1453AF7FEE8015FF03B44746B70B5F3DDE6818735E32E8A48B622C4`. |
+
+Bộ cuối gồm 47 kết quả được hai agent đồng thuận trực tiếp và 3 kết quả qua nhánh adjudication. Đây là bộ output model-backed hoàn chỉnh, không phải kết quả của scripted oracle. Việc tổng hợp từ nhiều run được ghi rõ để không trình bày sai rằng cả 50 case hoàn thành trong một run duy nhất.
+
+## 7. Quyết định kỹ thuật quan trọng
+
+- **Bối cảnh:** kiến trúc cũ cho output đúng hơn nhờ deterministic policy engine nhưng vi phạm mục tiêu non-rule-based.
+- **Phương án chọn:** dùng deterministic worker cho dữ liệu, phép tính và orchestration; để Policy Agent, Independent Evaluator và Adjudicator chịu trách nhiệm cho quyết định semantic.
+- **Lý do:** giảm hallucination ở dữ liệu và giảm số model call không cần thiết, nhưng vẫn giữ quyết định nghiệp vụ ở model.
+- **Trade-off:** output kém ổn định hơn policy engine và cần prompt/evaluation tốt hơn; đổi lại kiến trúc phản ánh đúng mục tiêu multi-agent và audit được từng quyết định.
 
 ## 8. Cách xác minh
 
 ```powershell
 # Kiểm tra code
-.venv\Scripts\python.exe -m ruff check src tests
+py -3.11 -m ruff check src tests
 
 # Chạy toàn bộ test offline
-.venv\Scripts\python.exe -m pytest -q
+py -3.11 -m pytest -q
 
-# Chạy một case với model thật
-.venv\Scripts\python.exe -m ecommerce_dispute.main --case EC_001 --no-write
+# Chạy một case bằng model thật, không ghi output
+py -3.11 -m ecommerce_dispute.main --case EC_001 --no-write
 
-# Xem kết quả run thật gần nhất
-Get-Content logging\run-full-001\metadata.json
-Get-Content logging\run-full-001\manifest.json
-Get-Content logging\run-openai-20260805-001\trace.jsonl -Tail 20
+# Chạy đủ 50 case; mỗi lần phải dùng run-id mới
+py -3.11 -m ecommerce_dispute.main --all --run-id <run-id-moi>
 
-# Kiểm tra các mốc công việc cá nhân
-git show --stat 2e95dba
-git show --stat 5c11aa3
-git show --stat c1f1b82
-git show --stat ba56d9e
+# Xem bằng chứng của lượt non-rule-based chính
+Get-Content logging\run-openai-nonrule-20260805-001\metadata.json
+Get-Content logging\run-openai-nonrule-20260805-001\manifest.json
+
+# Kiểm tra file nộp cuối
+Get-FileHash -Algorithm SHA256 output-run-openai-nonrule-20260805-final.zip
 ```
 
 ## 9. Điều học được và bước tiếp theo
 
-Qua bài này, tôi rút ra rằng việc “có nhiều agent” không đồng nghĩa với một hệ thống multi-agent đúng nghĩa. Cần xác định rõ agent nào thực sự đưa ra quyết định bằng model, agent nào chỉ là worker/tool, dữ liệu được handoff ra sao và ai có quyền ghi output.
+Qua bài này, tôi rút ra rằng việc “có nhiều agent” không tự động tạo thành một hệ thống multi-agent đúng nghĩa. Cần xác định rõ thành phần nào thực sự ra quyết định bằng model, thành phần nào chỉ là worker/tool, dữ liệu được handoff ra sao và thành phần nào có quyền ghi output.
 
-Các bước tiếp theo để có một submission đáng tin cậy:
+Các bước cải thiện tiếp theo:
 
-1. Chọn model có tài liệu chính thức chứng minh không vượt 10B và đủ khả năng structured reasoning.
-2. Giảm validator từ bảng đáp án chi tiết xuống các kiểm tra grounding/arithmetic/invariant tối thiểu, tránh tiếp tục bị xem là policy engine ẩn.
-3. Cải thiện prompt bằng cách mô tả rõ priority và ràng buộc field, sau đó đánh giá trên một tập case nhỏ trước khi chạy đủ 50 case.
-4. Tách nguyên nhân lỗi model khỏi lỗi kết nối, cấu hình timeout/concurrency phù hợp và chỉ tạo zip từ một run hoàn chỉnh.
-5. Lưu lại phản hồi chấm, điểm và submission ID thành artifact không chứa secret để báo cáo lần sau có bằng chứng đầy đủ.
+1. Chọn model có tài liệu chính thức chứng minh không vượt 10B nhưng đủ khả năng structured reasoning.
+2. Xây dựng tập eval riêng cho `secondary_issues` và `resolution_actions`, hai nhóm field đang có nhiều khác biệt nhất.
+3. Cải thiện prompt bằng ví dụ chính sách tổng quát, không đưa đáp án của từng test case hoặc tái tạo decision table trong code.
+4. Cấu hình Adjudicator cho các bất đồng kéo dài và lưu đầy đủ provenance của từng quyết định.
+5. Lưu response chấm, submission ID và breakdown điểm thành artifact không chứa secret để các lần đánh giá sau có bằng chứng đầy đủ.
 
 ## 10. Cam kết cá nhân
 
-- [x] Báo cáo phản ánh đúng phần việc có thể đối chiếu từ lịch sử Git và artifact trong repo.
-- [x] Không ghi “đã chạy thành công” cho lượt chạy model thật chưa hoàn thành.
-- [x] Phân biệt rõ test offline bằng scripted oracle với kết quả inference thật.
+- [x] Báo cáo phản ánh phần việc có thể đối chiếu từ lịch sử Git và artifact trong repo.
+- [x] Phân biệt rõ deterministic orchestration với quyết định semantic do model sinh.
+- [x] Không trình bày 50 output tổng hợp như một run duy nhất.
+- [x] Ghi đúng điểm mới nhất là **66.5438** và mức chênh lệch với lần trước.
+- [x] Không khẳng định trạng thái rule-based của lần chấm mới khi chưa có phản hồi tương ứng từ grader.
 - [x] Báo cáo không chứa `.env`, API key, token hoặc secret.
-- [x] Các hạn chế và lỗi hiện tại được ghi rõ, không che giấu kết quả thất bại.
 
 **Người báo cáo:** Nguyễn Quang Huy  
 **Ngày xác nhận:** 05/08/2026

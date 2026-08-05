@@ -6,7 +6,7 @@ from ecommerce_dispute.orchestration.output_builder import expected_evidence_ids
 from ecommerce_dispute.orchestration.state import CaseState
 from ecommerce_dispute.schemas import MechanicalReport, ValidationIssue
 from ecommerce_dispute.schemas.output import CaseOutput
-from ecommerce_dispute.validation.policy import policy_invariant_issues
+from ecommerce_dispute.validation.policy import outcome_consistency_issues
 
 
 def _issue(field: str, code: str, message: str, owner: str) -> ValidationIssue:
@@ -48,8 +48,8 @@ def validate_case_output(state: CaseState, output: CaseOutput) -> MechanicalRepo
     delivery = state.delivery_handoff.payload
     outcome = state.policy_decision.outcome
     issues = [
-        _issue(field, "BUSINESS_INVARIANT", message, "policy")
-        for field, message in policy_invariant_issues(outcome, state.policy_facts)
+        _issue(field, "OUTCOME_CONSISTENCY", message, "policy")
+        for field, message in outcome_consistency_issues(outcome)
     ]
     checks = (
         ("case_id", output.case_id, state.case_input.case_id, "output_builder"),

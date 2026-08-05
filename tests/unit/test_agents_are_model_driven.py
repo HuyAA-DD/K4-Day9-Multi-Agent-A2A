@@ -33,3 +33,21 @@ def test_obsolete_agent_modules_are_removed() -> None:
         "evaluator.py",
         "policy.py",
     }
+
+
+def test_production_validator_contains_no_policy_outcome_table() -> None:
+    validator = (
+        PROJECT_ROOT / "src" / "ecommerce_dispute" / "validation" / "policy.py"
+    )
+    source = validator.read_text(encoding="utf-8")
+    business_literals = {
+        "canceled_order_paid",
+        "unavailable_order_paid",
+        "late_delivery_seller",
+        "late_delivery_logistics",
+        "valid_split_payment",
+        "unsupported_late_claim",
+        "ORDER_CANCELED_AFTER_PAYMENT",
+        "SELLER_HANDOFF_AFTER_LIMIT",
+    }
+    assert not any(literal in source for literal in business_literals)
