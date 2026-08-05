@@ -1,7 +1,7 @@
 """JSONL trace writer for real agent executions."""
 
-from datetime import UTC, datetime
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -21,3 +21,8 @@ class TraceWriter:
             stream.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
             stream.write("\n")
 
+    def count_events(self) -> int:
+        if not self.path.exists():
+            return 0
+        with self.path.open("r", encoding="utf-8") as stream:
+            return sum(1 for line in stream if line.strip())

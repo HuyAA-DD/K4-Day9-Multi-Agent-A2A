@@ -1,6 +1,5 @@
-"""Shared Qwen3.5-9B client used by every agent role."""
+"""Shared local Qwen client used by every agent role."""
 
-from .client import SharedModelClient
+from .client import LocalModelClient
 
-__all__ = ["SharedModelClient"]
-
+__all__ = ["LocalModelClient"]

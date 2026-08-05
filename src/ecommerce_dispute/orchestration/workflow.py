@@ -1,28 +1,26 @@
-"""Deterministic routing layer around model-backed agents."""
+"""Declarative safety boundary for routes proposed by the Supervisor model."""
+
+from typing import ClassVar
 
 from ecommerce_dispute.orchestration.state import CasePhase, CaseState
 
 
 class SupervisorDag:
-    """Computes ready nodes; execution and model calls are added in the next stage."""
+    """Expose legal graph edges without deciding which edge the model selects."""
 
-    def ready_agents(self, state: CaseState) -> tuple[str, ...]:
-        if state.phase == CasePhase.RECEIVED:
-            return ("customer_agent", "order_product_agent")
+    ROUTE_GUARDS: ClassVar[dict[CasePhase, tuple[str, tuple[str, ...]]]] = {
+        CasePhase.RECEIVED: (
+            "investigate_customer_order",
+            ("customer_agent", "order_product_agent"),
+        ),
+        CasePhase.INVESTIGATING: (
+            "investigate_payment_delivery",
+            ("payment_agent", "delivery_agent"),
+        ),
+        CasePhase.POLICY_READY: ("apply_policy", ("policy_agent",)),
+        CasePhase.DECIDED: ("verify_output", ("verifier_agent",)),
+        CasePhase.VERIFYING: ("verify_output", ("verifier_agent",)),
+    }
 
-        if state.phase == CasePhase.INVESTIGATING:
-            ready: list[str] = []
-            if state.order_product_facts is not None:
-                if state.payment_facts is None:
-                    ready.append("payment_agent")
-                if state.delivery_facts is None:
-                    ready.append("delivery_agent")
-            if state.all_investigation_facts_ready() and state.policy_decision is None:
-                ready.append("policy_agent")
-            return tuple(ready)
-
-        if state.phase in {CasePhase.DECIDED, CasePhase.VERIFYING}:
-            return ("verifier_agent",)
-
-        return ()
-
+    def allowed_route(self, state: CaseState) -> tuple[str, tuple[str, ...]]:
+        return self.ROUTE_GUARDS.get(state.phase, ("", ()))

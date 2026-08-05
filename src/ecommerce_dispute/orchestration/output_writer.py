@@ -1,8 +1,8 @@
 """Atomic writer restricted to verified CaseOutput objects."""
 
 import os
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
 from ecommerce_dispute.schemas.output import CaseOutput
 

@@ -1,16 +1,28 @@
 {
   "model": {
-    "name": "Qwen/Qwen3.5-9B",
-    "parameter_size": "9B",
-    "shared_across_agents": true
+    "name": "Qwen/Qwen3-1.7B-GGUF",
+    "parameter_size": "1.7B",
+    "file": "Qwen3-1.7B-Q8_0.gguf",
+    "quantization": "Q8_0",
+    "shared_across_agents": true,
+    "enabled": true,
+    "decision_mode": "causal_structured_outputs"
   },
   "framework": {
     "name": "custom-supervisor-dag",
     "language": "Python"
   },
   "runtime": {
-    "llm_api": "OpenAI-compatible",
+    "llm_runtime": "llama.cpp-local-offline",
+    "model_device": "llama.cpp-cpu",
     "execution": "async DAG",
-    "status": "scaffolded"
+    "python": "3.11.9",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "run_id": "5a92b627c76d43dbba0ba940bddfd3c1",
+    "completed_at": "2026-08-05T13:53:28.995176+00:00",
+    "cases_total": 1,
+    "cases_succeeded": 0,
+    "cases_failed": 1,
+    "status": "partial_failure"
   }
 }

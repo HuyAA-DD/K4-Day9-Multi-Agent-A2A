@@ -2,58 +2,56 @@
 
 ## 1. Quyết định kiến trúc
 
-Hệ thống sử dụng kiến trúc **Supervisor DAG**. Một `Supervisor Agent` giữ trạng thái của từng case, phân công các agent chuyên môn, kiểm soát điều kiện chuyển bước và chỉ cho phép ghi output sau khi `Verifier Agent` xác nhận kết quả hợp lệ.
+Hệ thống dùng **Supervisor DAG**. `Supervisor Agent` sở hữu trạng thái của từng case, điều phối các agent chuyên môn và chỉ cho phép ghi file khi `Verifier Agent` trả kết quả hợp lệ.
 
-Tất cả agent dùng chung model:
+Tất cả agent dùng chung một model local:
 
 ```text
-Qwen/Qwen3.5-9B
+repo: Qwen/Qwen3-1.7B-GGUF
+file: Qwen3-1.7B-Q8_0.gguf
+runtime: llama.cpp qua llama-cpp-python
+device mặc định: CPU
 ```
 
-Model được phục vụ qua một endpoint tương thích OpenAI API. Mỗi agent là một vai trò độc lập với system prompt, tool allowlist, input schema và output schema riêng; không tải một bản model riêng cho từng agent.
+Model được nạp một lần từ Hugging Face cache với `local_files_only=True`. Các agent có prompt, tool allowlist và Pydantic output schema riêng nhưng dùng chung model instance; inference được tuần tự hóa để tránh tranh chấp tài nguyên.
 
-Các phép join dữ liệu, cộng tiền, tính giờ, áp `EC_POLICY_V2`, tạo evidence ID và kiểm tra JSON được thực hiện bằng code xác định. Model chịu trách nhiệm điều phối, lựa chọn tool, giải thích facts và tạo handoff có cấu trúc.
+Policy không được quyết định bằng `if/elif` hay policy engine. `Policy Agent` phải sinh `PolicyDecision` có cấu trúc từ facts đã kiểm chứng. Code chỉ thực hiện các thao tác cơ học: đọc/join dữ liệu, cộng tiền, tính chênh lệch thời gian, kiểm tra schema, giới hạn mảng, nguồn ID/số tiền, projection sang output và ghi file atomic.
 
 ## 2. Sơ đồ tổng thể
 
 ```mermaid
 flowchart TD
-    IN["input/EC_XXX.json"] --> IV["Input Validator"]
-    IV --> SUP["Supervisor Agent<br/>Qwen3.5-9B"]
+    IN["input/EC_XXX.json"] --> IV["Input validator"]
+    IV --> SUP["Supervisor Agent<br/>Qwen3-1.7B"]
 
-    SUP --> CA["Customer Agent<br/>Qwen3.5-9B"]
-    SUP --> OA["Order & Product Agent<br/>Qwen3.5-9B"]
+    SUP --> CA["Customer Agent<br/>Qwen3-1.7B"]
+    SUP --> OA["Order & Product Agent<br/>Qwen3-1.7B"]
+    CA --> CF[(CustomerFacts)]
+    OA --> OF[(OrderProductFacts)]
 
-    CA --> CF[("CustomerFacts")]
-    OA --> OF[("OrderProductFacts")]
+    OF --> PA["Payment Agent<br/>Qwen3-1.7B"]
+    OF --> DA["Delivery Agent<br/>Qwen3-1.7B"]
+    PA --> PF[(PaymentFacts)]
+    DA --> DF[(DeliveryFacts)]
 
-    OF --> PA["Payment Agent<br/>Qwen3.5-9B"]
-    OF --> DA["Delivery Agent<br/>Qwen3.5-9B"]
-
-    PA --> PF[("PaymentFacts")]
-    DA --> DF[("DeliveryFacts")]
-
-    CF --> PGA["Policy Agent<br/>Qwen3.5-9B"]
+    CF --> PGA["Policy Agent<br/>Qwen3-1.7B"]
     OF --> PGA
     PF --> PGA
     DF --> PGA
+    PGA --> PD[(PolicyDecision)]
 
-    PGA -->|"gọi EC_POLICY_V2"| PE["Deterministic Policy Engine"]
-    PE --> PD[("PolicyDecision")]
-    PD --> OB["Deterministic Output Builder"]
+    PD --> OB["Mechanical Output Builder"]
     CF --> OB
     OF --> OB
     PF --> OB
     DF --> OB
+    OB --> DRAFT[(Draft CaseOutput)]
 
-    OB --> DRAFT[("Draft CaseOutput")]
-    DRAFT --> VA["Verifier Agent<br/>Qwen3.5-9B"]
-    VA --> SV["Schema + Arithmetic + Evidence Validators"]
-
-    SV -->|pass| WR["Output Writer"]
-    SV -->|fail: retryable| SUP
-    SV -->|fail: terminal| ERR["Case failed; không ghi output"]
-
+    DRAFT --> MV["Mechanical validation gates"]
+    MV --> VA["Verifier Agent<br/>Qwen3-1.7B"]
+    VA -->|independent policy decision agrees| WR["Atomic Output Writer"]
+    VA -->|semantic disagreement| SUP
+    MV -->|source/schema failure| ERR["Case failed; không ghi output"]
     WR --> OUT["output/EC_XXX.json"]
 
     SUP -. trace .-> TR["logging/trace.jsonl"]
@@ -67,159 +65,98 @@ flowchart TD
 
 ## 3. Luồng thực thi một case
 
-1. Input Validator đọc `EC_XXX.json`, kiểm tra tên file, `case_id`, `claimed_order_id`, `investigation_scope` và `policy_version`.
-2. Supervisor tạo `CaseState` và giao song song hai nhiệm vụ đầu tiên cho Customer Agent và Order & Product Agent.
-3. Customer Agent trả về identity và lịch sử mua hàng trong `CustomerFacts`.
-4. Order & Product Agent trả về order, item, seller, product, category và tổng item/freight trong `OrderProductFacts`.
-5. Khi có `OrderProductFacts`, Supervisor mở hai nhánh Payment Agent và Delivery Agent.
-6. Payment Agent đối soát payment với item + freight bằng calculator tool và trả `PaymentFacts`.
-7. Delivery Agent tính delivery variance và seller handoff variance bằng datetime tool rồi trả `DeliveryFacts`.
-8. Khi đủ bốn nhóm facts, Policy Agent gọi policy engine để tạo `PolicyDecision` theo đúng thứ tự ưu tiên của `EC_POLICY_V2`.
-9. Output Builder ghép facts và decision thành `CaseOutput`; model không được tự viết số tiền hoặc evidence ID ở bước này.
-10. Verifier Agent và các validator code kiểm tra schema, null handling, giới hạn mảng, phép tính, evidence và tính nhất quán nghiệp vụ.
-11. Nếu lỗi có thể sửa, Supervisor chỉ chạy lại agent sở hữu field sai, tối đa hai lần. Nếu pass, Output Writer ghi JSON và đóng case.
+1. CLI đọc input, kiểm tra `case_id`, `claimed_order_id`, scope và `EC_POLICY_V2`.
+2. Supervisor chọn route hợp lệ của DAG.
+3. Customer Agent và Order & Product Agent truy xuất các nguồn dữ liệu được cấp quyền, rồi model phê duyệt handoff có cấu trúc.
+4. Payment Agent dùng calculator để cộng toàn bộ payment và đối soát với item + freight.
+5. Delivery Agent dùng datetime calculator để tính delivery variance và seller handoff variance.
+6. Policy Agent nhận facts rút gọn và trực tiếp sinh toàn bộ `PolicyDecision` theo prompt `EC_POLICY_V2` cùng JSON Schema.
+7. Output Builder chỉ chiếu facts/decision sang schema đầu ra và dựng evidence ID từ ID nguồn.
+8. Mechanical gates kiểm tra schema, arithmetic, ID nguồn, array limit và sự toàn vẹn của phép chiếu.
+9. Verifier không nhìn draft policy; model tự suy ra một `PolicyDecision` độc lập từ cùng facts. Runtime so sánh hai quyết định theo từng semantic field.
+10. Nếu khác nhau, Supervisor gửi feedback về Policy Agent, tối đa hai vòng policy. Chỉ output đã pass mới được ghi atomic.
 
 ## 4. Vai trò và quyền truy cập
 
-| Thành phần | Trách nhiệm | Dữ liệu/tool được phép | Không được phép |
-| --- | --- | --- | --- |
-| Supervisor Agent | Điều phối DAG, quản lý state, retry và timeout | Input schema, các handoff đã validate, graph state | Đọc toàn bộ CSV, tự tính tiền, tự sửa facts |
-| Customer Agent | Xác định khách hàng và lịch sử order | `customers`, `orders`, customer lookup tools | Đưa order lịch sử vào `affected_entities` |
-| Order & Product Agent | Điều tra order, item, seller, product, category | `orders`, `order_items`, `products`, `sellers` | Áp policy hoặc quyết định refund |
-| Payment Agent | Tổng hợp payment và đối soát tiền | `order_payments`, `OrderProductFacts`, payment calculator | Tự làm tròn bằng văn bản hoặc suy đoán refund |
-| Delivery Agent | Phân tích delivery và seller handoff | Order/item timestamps, delivery calculator | Suy đoán tracking checkpoint không có trong CSV |
-| Policy Agent | Chọn taxonomy, responsibility, refund, actions | Bốn facts đã validate, `EC_POLICY_V2` tool | Bỏ qua thứ tự ưu tiên hoặc tạo policy mới |
-| Verifier Agent | Tìm mâu thuẫn và định tuyến correction | Draft output, source-backed verifier tools | Ghi output trực tiếp |
-| Output Writer | Ghi JSON cuối cùng | Chỉ `CaseOutput` có trạng thái verified | Sửa nội dung output |
+| Agent | Đầu vào | Quyền/tool | Handoff |
+|---|---|---|---|
+| Supervisor | phase và trạng thái handoff | xem state, dispatch, yêu cầu correction | route ID |
+| Customer | claimed order ID, scope history | customer/order-history facade | `CustomerFacts` |
+| Order & Product | claimed order ID, product scope | order/item/product/seller facade | `OrderProductFacts` |
+| Payment | `OrderProductFacts` | payment facade, money calculator | `PaymentFacts` |
+| Delivery | `OrderProductFacts` | datetime calculator | `DeliveryFacts` |
+| Policy | bốn nhóm facts đã validate | chỉ xem facts | `PolicyDecision` |
+| Verifier | facts và draft đã qua mechanical gates | validators, suy luận policy độc lập | `VerificationReport` |
 
-Mọi data tool là read-only. Chỉ Output Writer có quyền ghi `output/`; Trace Writer chỉ được ghi `logging/trace.jsonl`.
+Không agent nào được truy cập tool ngoài allowlist. Policy và Verifier không được đọc trực tiếp CSV; chúng chỉ nhận typed facts từ các agent điều tra.
 
-## 5. Handoff contracts
+## 5. Ranh giới “không rule-based”
 
-Mọi handoff dùng JSON có schema và metadata chung:
+Các thao tác sau là cơ học và được code thực hiện để tránh LLM làm sai số:
 
-```json
-{
-  "case_id": "EC_001",
-  "sender": "customer_agent",
-  "recipient": "supervisor_agent",
-  "message_type": "customer_facts",
-  "attempt": 1,
-  "payload": {},
-  "source_refs": ["order:<order_id>"]
-}
-```
+- join theo khóa dữ liệu và giữ thứ tự nguồn;
+- cộng/round tiền, trừ timestamp;
+- dựng stable ID và evidence ID;
+- Pydantic/JSON Schema validation;
+- kiểm tra ID và số tiền do model trả có tồn tại trong facts;
+- so sánh hai structured decisions và ghi file atomic.
 
-Các payload chính:
+Các quyết định nghiệp vụ sau bắt buộc do model tạo:
 
-| Contract | Producer | Consumer | Nội dung |
-| --- | --- | --- | --- |
-| `CustomerFacts` | Customer Agent | Supervisor, Policy, Output Builder | `customer_unique_id`, related orders, repeat flag |
-| `OrderProductFacts` | Order & Product Agent | Payment, Delivery, Policy, Output Builder | order status, timestamps, items, sellers, products, categories, totals |
-| `PaymentFacts` | Payment Agent | Policy, Output Builder | payment rows, types, totals, difference, reconciled |
-| `DeliveryFacts` | Delivery Agent | Policy, Output Builder | delivery variance, handoff analysis, late seller IDs |
-| `PolicyDecision` | Policy Agent | Output Builder | issue taxonomy, status, root cause, responsible parties, refund, actions |
-| `VerificationReport` | Verifier Agent | Supervisor, Output Writer | pass/fail, field errors, owner agent, retryability |
+- primary issue và thứ tự ưu tiên policy;
+- secondary issues;
+- case status, root cause và responsible parties;
+- refund cần áp dụng và resolution actions;
+- semantic verification độc lập.
 
-Handoff không được chứa toàn bộ DataFrame hoặc toàn bộ CSV. Agent chỉ nhận các rows thuộc order đang điều tra và những facts tối thiểu cần cho nhiệm vụ.
+Trong production không tồn tại `policies/ec_policy_v2.py`, bảng candidate hoặc chuỗi `if/elif` chọn kết quả nghiệp vụ.
 
-## 6. Trạng thái DAG
+## 6. Hợp đồng dữ liệu
 
-```mermaid
-stateDiagram-v2
-    [*] --> RECEIVED
-    RECEIVED --> INVESTIGATING: input valid
-    RECEIVED --> FAILED: input invalid
-    INVESTIGATING --> POLICY_READY: all facts valid
-    POLICY_READY --> DECIDED: policy engine succeeded
-    DECIDED --> VERIFYING: draft built
-    VERIFYING --> VERIFIED: all validators pass
-    VERIFYING --> INVESTIGATING: correction requested
-    VERIFYING --> FAILED: terminal error / retry exhausted
-    VERIFIED --> WRITTEN: atomic output write
-    WRITTEN --> [*]
-    FAILED --> [*]
-```
+Mỗi handoff dùng Pydantic model với `extra="forbid"`. Các enum policy, giới hạn array, tiền không âm và confidence `[0,1]` được khóa bằng JSON Schema ngay trong lúc llama.cpp decode. Model output sai schema, dùng ID/số tiền không có trong facts hoặc chứa phần tử trùng sẽ bị retry hữu hạn rồi fail case.
 
-Một case không được chuyển sang `POLICY_READY` khi thiếu bất kỳ contract bắt buộc nào. Một output không được ghi khi state chưa phải `VERIFIED`.
+`CaseOutput` giữ nguyên schema trong README. Related orders chỉ nằm trong `customer_context`, không được đưa vào `affected_entities`.
 
-## 7. Policy engine và tính xác định
+## 7. Retry, trace và privacy
 
-`EC_POLICY_V2` là decision table theo first-match. Code phải xét lần lượt:
+- Mỗi model decision có tối đa ba lần sửa schema/grounding.
+- Policy có tối đa hai vòng khi Verifier đưa semantic disagreement.
+- Lỗi terminal không tạo hoặc ghi đè output của case đó.
+- `logging/trace.jsonl` được tạo mới cho mỗi run và ghi route, handoff cùng structured model decisions; không ghi system prompt, user prompt hoàn chỉnh, raw CSV row hay API key.
+- `logging/metadata.json` ghi model, file GGUF, quantization, runtime, device, run ID và số case thành công/thất bại.
+- Inference chạy local offline; code không dùng endpoint hay API key.
 
-1. `canceled_order_paid`
-2. `unavailable_order_paid`
-3. `late_delivery_seller`
-4. `late_delivery_logistics`
-5. `valid_split_payment`
-6. `unsupported_late_claim`
-
-Secondary issues và supplemental actions cũng được tạo theo thứ tự cố định trong README. Tất cả số tiền và số giờ được làm tròn hai chữ số bằng calculator tool. Nếu order không có item, các trường phụ thuộc item phải là `null`, không phải `0`.
-
-## 8. Verification gates
-
-Verifier chỉ trả `pass` khi toàn bộ gate sau thành công:
-
-- File name khớp `case_id` và claimed order.
-- Output hợp lệ theo Pydantic/JSON Schema.
-- Primary issue thỏa đúng first-match policy.
-- Secondary issues và actions đúng điều kiện, đúng thứ tự.
-- Tổng item, freight, payment và difference được tính lại từ source rows.
-- Delivery/handoff variance được tính lại từ timestamp gốc.
-- Evidence ID đúng format và thực sự tồn tại trong dữ liệu hoặc policy table.
-- `recommended_refund_brl` khớp primary issue.
-- `action_required` chỉ xuất hiện khi refund lớn hơn 0.
-- Các array không vượt giới hạn và giữ thứ tự ổn định.
-- Related orders không xuất hiện trong `affected_entities.order_ids`.
-
-## 9. Retry và xử lý lỗi
-
-- Mỗi agent tối đa hai lần chạy cho một case.
-- Schema lỗi được trả về chính agent tạo payload.
-- Source data thiếu được biểu diễn bằng `null`/mảng rỗng theo README; không yêu cầu model suy đoán.
-- Policy không match bất kỳ rule nào là terminal error để tránh tạo taxonomy ngoài đề.
-- Ghi output theo kiểu atomic: tạo file tạm trong `output/`, validate lần cuối rồi thay tên.
-- `trace.jsonl` được tạo mới cho mỗi lần chạy đủ 50 case, không append trace từ lần chạy trước.
-
-## 10. Trace và metadata
-
-Mỗi event trong `logging/trace.jsonl` có dạng:
-
-```json
-{"run_id":"...","case_id":"EC_001","event":"handoff","sender":"customer_agent","recipient":"supervisor_agent","attempt":1,"status":"success","payload_type":"CustomerFacts"}
-```
-
-Trace không ghi API key, prompt chứa secret hoặc toàn bộ CSV row không cần thiết. `logging/metadata.json` khai báo model cố định `Qwen/Qwen3.5-9B`, parameter size `9B`, framework và runtime thực tế.
-
-## 11. Cấu trúc source
+## 8. Cấu trúc source
 
 ```text
 src/ecommerce_dispute/
 ├── agents/          # Supervisor và sáu specialist agents
 ├── data/            # Read-only Olist repository
-├── orchestration/   # CaseState và Supervisor DAG
-├── policies/        # EC_POLICY_V2 deterministic engine
-├── schemas/         # Input, handoff và output contracts
-├── tools/           # Calculator và evidence tools
+├── llm/             # shared llama.cpp client
+├── orchestration/   # CaseState, DAG, runner, output builder/writer
+├── schemas/         # input, handoff và output contracts
+├── tools/           # scoped facades, calculators, validators, evidence
 ├── tracing/         # JSONL trace writer
-├── config.py        # Model name cố định và runtime settings
-└── main.py          # CLI entry point
+├── config.py        # fixed model/file và runtime settings
+└── main.py          # CLI
 
-prompts/             # System prompt riêng cho từng agent
-tests/               # Unit/integration tests
-input/               # 50 input JSON
-output/              # 50 output JSON sau khi chạy
+prompts/             # role-specific system prompts
+tests/               # unit và integration tests với scripted model
+input/               # EC_001.json ... EC_050.json
+output/              # verified case outputs
 logging/             # trace.jsonl và metadata.json
 ```
 
-## 12. Model serving
-
-Toàn bộ agent gọi cùng một OpenAI-compatible endpoint:
+## 9. Runtime model
 
 ```text
-model: Qwen/Qwen3.5-9B
-temperature: 0.0
-response format: JSON theo contract của agent
+model: Qwen/Qwen3-1.7B-GGUF
+file: Qwen3-1.7B-Q8_0.gguf
+parameters: 1.7B
+quantization: Q8_0
+source: Hugging Face cache, local_files_only=True
+context: 4096 tokens
+generation: Qwen3 non-thinking sampling + llama.cpp JSON Schema constrained decoding
 ```
 
-Model name được khai báo trực tiếp trong source để đáp ứng yêu cầu chấm bài; endpoint và API key lấy từ `.env`. Với Qwen3.5-9B local, runtime nên bật text-only/language-model-only vì bài không cần vision.
+`MODEL_GPU_LAYERS=0` chạy CPU. Có thể tăng số layer offload khi máy đã có CUDA runtime tương thích; model name và filename vẫn cố định trong source để metadata và kết quả có thể tái lập.

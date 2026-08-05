@@ -2,16 +2,71 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+PrimaryIssue = Literal[
+    "canceled_order_paid",
+    "unavailable_order_paid",
+    "late_delivery_seller",
+    "late_delivery_logistics",
+    "valid_split_payment",
+    "unsupported_late_claim",
+]
+SecondaryIssue = Literal[
+    "multi_item_order",
+    "multi_seller_order",
+    "split_payment",
+    "repeat_customer",
+    "multiple_categories",
+]
+RootCauseCode = Literal[
+    "SELLER_HANDOFF_AFTER_LIMIT",
+    "CARRIER_DELIVERED_AFTER_ESTIMATE",
+    "ORDER_CANCELED_AFTER_PAYMENT",
+    "ORDER_UNAVAILABLE_AFTER_PAYMENT",
+    "MULTIPLE_PAYMENTS_RECONCILED",
+    "DELIVERY_WITHIN_ESTIMATE",
+]
+ResolutionAction = Literal[
+    "issue_full_refund",
+    "refund_freight",
+    "explain_valid_split_payment",
+    "reject_late_refund",
+    "review_seller_handoff",
+    "review_carrier_delay",
+    "verify_refund_completion",
+    "coordinate_multi_seller_case",
+    "verify_payment_allocation",
+]
+
+
+class SupervisorDecision(StrictModel):
+    route: Literal[
+        "investigate_customer_order",
+        "investigate_payment_delivery",
+        "apply_policy",
+        "verify_output",
+    ]
+
+
+class HandoffDecision(StrictModel):
+    action: Literal["handoff", "retry"]
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class PrimaryPolicySelection(StrictModel):
+    primary_issue: PrimaryIssue
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
 class CustomerFacts(StrictModel):
     customer_unique_id: str | None
-    related_order_ids: list[str] = Field(default_factory=list, max_length=5)
+    related_order_ids: list[str] = Field(default_factory=list)
     repeat_customer: bool
 
 
@@ -31,9 +86,9 @@ class OrderProductFacts(StrictModel):
     estimated_delivery_at: str | None
     carrier_handoff_at: str | None
     items: list[ItemFact] = Field(default_factory=list)
-    seller_ids: list[str] = Field(default_factory=list, max_length=3)
-    product_ids: list[str] = Field(default_factory=list, max_length=5)
-    category_names: list[str] = Field(default_factory=list, max_length=5)
+    seller_ids: list[str] = Field(default_factory=list)
+    product_ids: list[str] = Field(default_factory=list)
+    category_names: list[str] = Field(default_factory=list)
     item_total_brl: float | None
     freight_total_brl: float | None
     multi_item_order: bool
@@ -48,7 +103,7 @@ class PaymentFact(StrictModel):
 
 
 class PaymentFacts(StrictModel):
-    payments: list[PaymentFact] = Field(default_factory=list, max_length=5)
+    payments: list[PaymentFact] = Field(default_factory=list)
     item_total_brl: float | None
     freight_total_brl: float | None
     expected_total_brl: float | None
@@ -73,7 +128,7 @@ class DeliveryFacts(StrictModel):
     delivery_variance_hours: float | None
     delivered_late: bool
     seller_handoff_analysis: list[SellerHandoffFact] = Field(default_factory=list)
-    late_handoff_seller_ids: list[str] = Field(default_factory=list, max_length=3)
+    late_handoff_seller_ids: list[str] = Field(default_factory=list)
 
 
 class ResponsibleParty(StrictModel):
@@ -82,13 +137,22 @@ class ResponsibleParty(StrictModel):
 
 
 class PolicyDecision(StrictModel):
-    primary_issue: str
-    secondary_issues: list[str]
+    primary_issue: PrimaryIssue
+    secondary_issues: list[SecondaryIssue] = Field(max_length=5)
     case_status: Literal["action_required", "no_action"]
-    root_cause_codes: list[str] = Field(max_length=3)
+    root_cause_codes: list[RootCauseCode] = Field(min_length=1, max_length=3)
     responsible_parties: list[ResponsibleParty] = Field(max_length=3)
-    recommended_refund_brl: float
-    resolution_actions: list[str] = Field(max_length=5)
+    recommended_refund_brl: float = Field(ge=0.0)
+    resolution_actions: list[ResolutionAction] = Field(min_length=1, max_length=5)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def normalize_confidence_percent(cls, value: object) -> object:
+        """Accept an LLM's equivalent percentage notation as a 0..1 fraction."""
+        if isinstance(value, (int, float)) and 1 < value <= 100:
+            return value / 100
+        return value
 
 
 class VerificationIssue(StrictModel):
@@ -103,6 +167,14 @@ class VerificationReport(StrictModel):
     status: Literal["pass", "fail"]
     issues: list[VerificationIssue] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def status_matches_issues(self) -> "VerificationReport":
+        if self.status == "pass" and self.issues:
+            raise ValueError("pass verification cannot contain issues")
+        if self.status == "fail" and not self.issues:
+            raise ValueError("fail verification must contain at least one issue")
+        return self
+
 
 class AgentHandoff(StrictModel):
     case_id: str
@@ -112,4 +184,3 @@ class AgentHandoff(StrictModel):
     attempt: int = Field(ge=1)
     payload: dict[str, Any]
     source_refs: list[str] = Field(default_factory=list)
-

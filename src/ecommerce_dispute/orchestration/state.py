@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
 
 from ecommerce_dispute.schemas.case import CaseInput
 from ecommerce_dispute.schemas.handoffs import (
@@ -13,6 +12,7 @@ from ecommerce_dispute.schemas.handoffs import (
     PolicyDecision,
     VerificationReport,
 )
+from ecommerce_dispute.schemas.output import CaseOutput
 
 
 class CasePhase(StrEnum):
@@ -35,7 +35,7 @@ class CaseState:
     payment_facts: PaymentFacts | None = None
     delivery_facts: DeliveryFacts | None = None
     policy_decision: PolicyDecision | None = None
-    draft_output: dict[str, Any] | None = None
+    draft_output: CaseOutput | None = None
     verification: VerificationReport | None = None
     attempts: dict[str, int] = field(default_factory=dict)
 
@@ -49,4 +49,3 @@ class CaseState:
                 self.delivery_facts,
             )
         )
-
